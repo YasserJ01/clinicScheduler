@@ -1,5 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from app.config import settings
 from app.models import Base
 
@@ -27,18 +28,26 @@ async def get_db() -> AsyncSession:
             raise
 
 
+async def _create_enum_if_not_exists(conn, enum_name, values):
+    """Create a PostgreSQL ENUM type if it doesn't already exist.
+
+    asyncpg translates PostgreSQL duplicate_object errors into SQLAlchemy
+    IntegrityError, so the PL/pgSQL EXCEPTION block doesn't work through
+    SQLAlchemy. We catch the error at the Python level instead.
+    """
+    try:
+        await conn.execute(text(f"""
+            DO $$ BEGIN
+                CREATE TYPE {enum_name} AS ENUM ({', '.join(f"'{v}'" for v in values)});
+            EXCEPTION WHEN duplicate_object THEN null;
+            END $$;
+        """))
+    except IntegrityError:
+        pass
+
+
 async def init_db():
     async with engine.begin() as conn:
-        await conn.execute(text("""
-            DO $$ BEGIN
-                CREATE TYPE userrole AS ENUM ('patient', 'doctor', 'admin');
-            EXCEPTION WHEN duplicate_object THEN null;
-            END $$;
-        """))
-        await conn.execute(text("""
-            DO $$ BEGIN
-                CREATE TYPE appointmentstatus AS ENUM ('scheduled', 'confirmed', 'completed', 'cancelled');
-            EXCEPTION WHEN duplicate_object THEN null;
-            END $$;
-        """))
+        await _create_enum_if_not_exists(conn, "userrole", ["patient", "doctor", "admin"])
+        await _create_enum_if_not_exists(conn, "appointmentstatus", ["scheduled", "confirmed", "completed", "cancelled"])
         await conn.run_sync(Base.metadata.create_all)
