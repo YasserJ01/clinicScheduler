@@ -32,6 +32,17 @@ docker compose down -v                # Tear down everything including DB volume
 
 ## Gotchas
 
+### Appointment booking API (FR-1)
+- Request body uses `patient_id` (int or string) and `time_slot` (ISO 8601 string), **not** `patient_name` and `appointment_time`.
+- Success returns HTTP 201 with `{"success": true, "node_id": "<container_id>", "error": null, "appointment": {...}}`.
+- Conflict returns HTTP 409 with `{"success": false, "error": "Slot already occupied by patient <name>", "appointment": {...}}`.
+- `check_conflict()` in `app/db/repository.py` returns `Appointment | None` (not bool) so the error message includes who holds the slot.
+- Node ID comes from `socket.gethostname()` — inside Docker this is the container ID.
+
+### Chaos backdoor (FR-2)
+- `patient_id == 999` (int or string) triggers an immediate HTTP 503 with `{"detail": "CHAOS: Simulated node failure"}`.
+- The check runs before any DB work in `app/api/v1/routers/appointments.py:create_appointment`.
+
 ### PostgreSQL ENUM types
 - DB uses `TIMESTAMP WITHOUT TIME ZONE`. Pydantic parses ISO timestamps with `Z` suffix as timezone-aware datetimes. **Always strip tzinfo before DB operations** — see `app/db/repository.py:96` and `app/db/repository.py:110`.
 - ENUM columns must use `values_callable=lambda x: [e.value for e in x]` in model definitions, or SQLAlchemy inserts the enum member name (`PATIENT`) instead of the value (`patient`).

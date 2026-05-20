@@ -1,31 +1,56 @@
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+import socket
+import logging
+from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, field_validator
 from datetime import datetime
+from typing import Union
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from app.db.repository import AppointmentRepository, DoctorRepository, PatientRepository
 from app.api.v1.dependencies import get_current_user
 
+logger = logging.getLogger("clinic.appointments")
+
 router = APIRouter(prefix="/appointments", tags=["appointments"])
+
+NODE_ID = socket.gethostname()
 
 
 class AppointmentCreate(BaseModel):
     doctor_id: int
-    patient_name: str
-    appointment_time: datetime
+    patient_id: Union[int, str]
+    time_slot: str
+
+    @field_validator("time_slot")
+    @classmethod
+    def validate_time_slot(cls, v: str) -> str:
+        try:
+            datetime.fromisoformat(v.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            raise ValueError("time_slot must be a valid ISO 8601 datetime string")
+        return v
 
 
-class AppointmentResponse(BaseModel):
+class AppointmentDetail(BaseModel):
     id: int
     doctor_id: int
+    patient_id: int
     patient_name: str
-    appointment_time: datetime
+    time_slot: str
     status: str
 
     model_config = {"from_attributes": True}
 
 
-@router.get("", response_model=list[AppointmentResponse])
+class BookingResponse(BaseModel):
+    success: bool
+    node_id: str
+    error: str | None = None
+    appointment: AppointmentDetail | None = None
+
+
+@router.get("", response_model=list[AppointmentDetail])
 async def list_appointments(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -39,51 +64,90 @@ async def list_appointments(
         result.append({
             "id": appt.id,
             "doctor_id": appt.doctor_id,
+            "patient_id": appt.patient_id,
             "patient_name": patient.name if patient else "Unknown",
-            "appointment_time": appt.appointment_time,
+            "time_slot": appt.appointment_time.isoformat(),
             "status": appt.status.value,
         })
     return result
 
 
-@router.post("", response_model=AppointmentResponse, status_code=201)
+@router.post("")
 async def create_appointment(
     appt: AppointmentCreate,
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    patient_id_str = str(appt.patient_id)
+
+    if patient_id_str == "999":
+        logger.error("CHAOS: Poison pill detected — patient_id=%s on node %s", patient_id_str, NODE_ID)
+        raise HTTPException(status_code=503, detail="CHAOS: Simulated node failure")
+
+    naive_time = _parse_time_slot(appt.time_slot)
+
     doctor_repo = DoctorRepository(db)
     doctor = await doctor_repo.get_by_id(appt.doctor_id)
     if not doctor:
-        raise HTTPException(status_code=404, detail="Doctor not found")
+        return JSONResponse(status_code=400, content=BookingResponse(
+            success=False,
+            node_id=NODE_ID,
+            error="Doctor not found",
+        ).model_dump())
 
-    conflict = await AppointmentRepository(db).check_conflict(
-        appt.doctor_id, appt.appointment_time
-    )
+    appt_repo = AppointmentRepository(db)
+    conflict = await appt_repo.check_conflict(appt.doctor_id, naive_time)
     if conflict:
-        raise HTTPException(status_code=409, detail="Time slot already booked")
+        patient_repo = PatientRepository(db)
+        holder = await patient_repo.get_by_id(conflict.patient_id)
+        holder_name = holder.name if holder else "Unknown"
+        conflict_resp = BookingResponse(
+            success=False,
+            node_id=NODE_ID,
+            error=f"Slot already occupied by patient {holder_name}",
+            appointment=AppointmentDetail(
+                id=conflict.id,
+                doctor_id=conflict.doctor_id,
+                patient_id=conflict.patient_id,
+                patient_name=holder_name,
+                time_slot=conflict.appointment_time.isoformat(),
+                status=conflict.status.value,
+            ),
+        )
+        return JSONResponse(status_code=409, content=conflict_resp.model_dump())
 
     patient_repo = PatientRepository(db)
-    patient = await patient_repo.get_or_create_by_name(
-        appt.patient_name, f"{appt.patient_name.lower().replace(' ', '.')}@clinic.com"
-    )
+    patient = await patient_repo.get_by_id(int(patient_id_str))
+    if not patient:
+        return JSONResponse(status_code=404, content=BookingResponse(
+            success=False,
+            node_id=NODE_ID,
+            error=f"Patient with id {patient_id_str} not found",
+        ).model_dump())
 
-    new_appt = await AppointmentRepository(db).create(
+    new_appt = await appt_repo.create(
         doctor_id=appt.doctor_id,
         patient_id=patient.id,
-        appointment_time=appt.appointment_time,
+        appointment_time=naive_time,
     )
 
-    return {
-        "id": new_appt.id,
-        "doctor_id": new_appt.doctor_id,
-        "patient_name": patient.name,
-        "appointment_time": new_appt.appointment_time,
-        "status": new_appt.status.value,
-    }
+    logger.info("Booking created: appt_id=%s on node %s", new_appt.id, NODE_ID)
+    booking = BookingResponse(
+        success=True,
+        node_id=NODE_ID,
+        appointment=AppointmentDetail(
+            id=new_appt.id,
+            doctor_id=new_appt.doctor_id,
+            patient_id=new_appt.patient_id,
+            patient_name=patient.name,
+            time_slot=new_appt.appointment_time.isoformat(),
+            status=new_appt.status.value,
+        ),
+    )
+    return JSONResponse(status_code=201, content=booking.model_dump())
 
 
-@router.get("/{appointment_id}", response_model=AppointmentResponse)
+@router.get("/{appointment_id}", response_model=AppointmentDetail)
 async def get_appointment(
     appointment_id: int,
     current_user: dict = Depends(get_current_user),
@@ -100,7 +164,13 @@ async def get_appointment(
     return {
         "id": appt.id,
         "doctor_id": appt.doctor_id,
+        "patient_id": appt.patient_id,
         "patient_name": patient.name if patient else "Unknown",
-        "appointment_time": appt.appointment_time,
+        "time_slot": appt.appointment_time.isoformat(),
         "status": appt.status.value,
     }
+
+
+def _parse_time_slot(time_slot: str) -> datetime:
+    dt = datetime.fromisoformat(time_slot.replace("Z", "+00:00"))
+    return dt.replace(tzinfo=None) if dt.tzinfo else dt

@@ -106,7 +106,7 @@ class AppointmentRepository:
 
     async def check_conflict(
         self, doctor_id: int, appointment_time: datetime
-    ) -> bool:
+    ) -> Appointment | None:
         naive_time = appointment_time.replace(tzinfo=None) if appointment_time.tzinfo else appointment_time
         result = await self.session.execute(
             select(Appointment).where(
@@ -115,4 +115,4 @@ class AppointmentRepository:
                 Appointment.status != AppointmentStatus.CANCELLED,
             )
         )
-        return result.scalar_one_or_none() is not None
+        return result.scalar_one_or_none()
