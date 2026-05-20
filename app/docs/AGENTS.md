@@ -27,8 +27,14 @@ docker compose down -v                # Tear down everything including DB volume
 | `app/api/v1/routers/` | Route handlers: `auth`, `doctors`, `patients`, `appointments`, `health`. |
 | `app/core/middleware.py` | MessagePack serialization + `X-Response-Time` header. |
 | `app/core/circuit_breaker.py` | Circuit breaker for DB/Redis partial failure isolation. |
+| `app/core/security.py` | JWT creation (with role claim), bcrypt password hashing. |
 | `nginx/nginx.conf` | NGINX config: consistent hashing, rate limiting (500r/s), retry on 502/503. |
 | `loadtest/scheduler.js` | k6 load test: 30s ramp to 50 VUs, 1m at 200 VUs, 30s ramp down. |
+| `tests/unit/test_security.py` | 15 unit tests: password hashing, JWT creation/validation, `alg: none` attack. |
+| `tests/integration/test_auth.py` | 10 integration tests: register, login, JWT validation. |
+| `tests/integration/test_doctors.py` | 6 integration tests: list doctors, create doctor (admin). |
+| `tests/integration/test_patients.py` | 5 integration tests: list patients, profile. |
+| `tests/conftest.py` | Pytest fixtures: HTTP client, admin/user tokens, auth headers. |
 
 ## Gotchas
 
@@ -64,6 +70,11 @@ docker compose down -v                # Tear down everything including DB volume
 ### bcrypt / passlib compatibility
 - `requirements.txt` pins `bcrypt==4.0.1`. Newer bcrypt versions break passlib 1.7.4 with a `ValueError: password cannot be longer than 72 bytes` error.
 
+### JWT role claims
+- Both `POST /auth/register` and `POST /auth/login` embed the user's `role` in the JWT payload as a `role` claim.
+- `get_current_user` in `app/api/v1/dependencies.py` reads `payload.get("role")` for RBAC checks.
+- `create_access_token()` accepts optional `extra_claims` dict for adding custom claims.
+
 ## Dev Commands
 
 ```bash
@@ -81,4 +92,11 @@ docker compose exec nginx nginx -s reload
 
 # Run load test
 & "C:\Program Files\k6\k6.exe" run loadtest/scheduler.js
+
+# Run automated tests (requires running Docker stack)
+python -m pytest tests/ -v
+
+# Run specific test file
+python -m pytest tests/unit/test_security.py -v
+python -m pytest tests/integration/test_auth.py -v
 ```

@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Document Version | 1.0.0 |
+| Document Version | 1.1.0 |
 | Status | **Completed and Verified** |
 | Verified By | Engineering Team |
 | Date | 2026-05-21 |
@@ -30,6 +30,11 @@ Deliver the complete authentication flow and all database models. By the end of 
 | `app/api/v1/routers/doctors.py` | `GET /doctors`, `POST /doctors` (admin-only) |
 | `app/api/v1/routers/patients.py` | `GET /patients`, `GET /patients/me` |
 | `app/core/exceptions.py` | Global exception handlers for `SQLAlchemyError`, `CircuitBreakerError` |
+| `tests/conftest.py` | Pytest fixtures: HTTP client, admin/user token generation, auth headers |
+| `tests/unit/test_security.py` | 15 unit tests: password hashing (6), JWT creation/validation (9) |
+| `tests/integration/test_auth.py` | 10 integration tests: register (3), login (3), JWT validation (4) |
+| `tests/integration/test_doctors.py` | 6 integration tests: list doctors (3), create doctor (3) |
+| `tests/integration/test_patients.py` | 5 integration tests: list patients (2), profile (3) |
 
 ### 2.2 Database Models
 
@@ -48,8 +53,8 @@ All four models are defined in `app/models/__init__.py` with correct ENUM config
 ### 2.3 Authentication Flow
 
 ```
-POST /auth/register → hash password (bcrypt) → create User → issue JWT (HS256, 30min expiry)
-POST /auth/login → verify password (bcrypt) → issue JWT (HS256, 30min expiry)
+POST /auth/register → hash password (bcrypt) → create User → issue JWT (HS256, 30min expiry, includes role claim)
+POST /auth/login → verify password (bcrypt) → issue JWT (HS256, 30min expiry, includes role claim)
 Protected endpoint → validate JWT signature → check expiry → extract sub + role → allow/deny
 ```
 
@@ -161,30 +166,126 @@ All tests executed against a fresh `docker compose up -d --build` deployment.
 
 **Resolution:** Removed the `version` line from `docker-compose.yml`.
 
+### 5.3 Resolved: JWT Missing Role Claim
+
+**Issue:** `POST /auth/register` and `POST /auth/login` created JWTs without embedding the user's `role` claim. The `get_current_user` dependency in `app/api/v1/dependencies.py` reads `payload.get("role", "patient")`, defaulting all users to `patient`. This caused `POST /doctors` admin role checks to fail even for users registered with `role: "admin"`.
+
+**Resolution:** 
+- Added `extra_claims` parameter to `create_access_token()` in `app/core/security.py`
+- Updated `app/api/v1/routers/auth.py` register endpoint to pass `extra_claims={"role": req.role}`
+- Updated login endpoint to pass `extra_claims={"role": user.role.value}`
+
+**Verification:** Integration test `test_create_doctor_as_admin` now passes — admin users receive tokens with correct role claim and can create doctors (HTTP 201).
+
 ---
 
-## 6. Technical Notes
+## 6. Automated Test Suite
 
-### 6.1 Password Hashing
+### 6.1 Test Infrastructure
+
+- **Framework:** pytest 8.3.4 + pytest-asyncio 0.24.0 + httpx 0.28.1
+- **Execution:** `python -m pytest tests/ -v` from project root
+- **Target:** Running Docker stack (`docker compose up -d --build`)
+- **Base URL:** `http://localhost` (NGINX port 80)
+
+### 6.2 Test Fixtures (`tests/conftest.py`)
+
+| Fixture | Scope | Purpose |
+|---|---|---|
+| `event_loop` | session | Shared asyncio loop for all async fixtures |
+| `http_client` | session | `httpx.Client` with `base_url="http://localhost"`, 10s timeout |
+| `admin_token` | session | Registers unique admin user, returns JWT with `role: "admin"` |
+| `user_token` | session | Registers unique patient user, returns JWT with `role: "patient"` |
+| `auth_headers` | function | `{"Authorization": "Bearer <user_token>"}` |
+| `admin_headers` | function | `{"Authorization": "Bearer <admin_token>"}` |
+
+### 6.3 Unit Tests (`tests/unit/test_security.py`) — 15 tests
+
+**TestPasswordHashing (6 tests):**
+| Test | Assertion |
+|---|---|
+| `test_hash_produces_non_plain_string` | Hashed output differs from plaintext input |
+| `test_hash_is_deterministic_in_verification` | `verify_password(plain, hash(plain))` returns `True` |
+| `test_different_passwords_produce_different_hashes` | Two different passwords produce different hash strings |
+| `test_same_password_produces_different_hashes` | Same password produces different hashes (bcrypt salt) |
+| `test_verify_password_returns_false_for_wrong_password` | Wrong password returns `False` |
+| `test_verify_password_returns_false_for_empty_string` | Empty string returns `False` |
+
+**TestAccessToken (9 tests):**
+| Test | Assertion |
+|---|---|
+| `test_token_is_non_empty_string` | Token is a non-empty string |
+| `test_token_contains_sub_claim` | Decoded payload has `sub` matching subject |
+| `test_token_contains_exp_claim` | Decoded payload has `exp` timestamp |
+| `test_token_expiry_is_in_future` | `exp` is greater than current UTC timestamp |
+| `test_custom_expiry` | Custom `expires_delta` produces correct expiry window |
+| `test_expired_token_raises_error` | Token with negative expiry raises decode exception |
+| `test_tampered_token_raises_error` | Modified signature raises decode exception |
+| `test_wrong_secret_raises_error` | Token decoded with wrong secret raises exception |
+| `test_alg_none_attack_rejected` | Forged token with `alg: none` header is rejected |
+
+### 6.4 Integration Tests (`tests/integration/`) — 21 tests
+
+**test_auth.py (10 tests):**
+| Test Class | Tests | Coverage |
+|---|---|---|
+| `TestRegister` | 3 | New user returns JWT, duplicate rejected (400), role parameter accepted |
+| `TestLogin` | 3 | Correct credentials return JWT, wrong password returns 401, nonexistent user returns 401 |
+| `TestJWTValidation` | 4 | Valid token on protected endpoint (200), no token (401/403), invalid token (401/403), expired token (401/403) |
+
+**test_doctors.py (6 tests):**
+| Test Class | Tests | Coverage |
+|---|---|---|
+| `TestListDoctors` | 3 | Authenticated list (200), unauthenticated (401/403), response field validation |
+| `TestCreateDoctor` | 3 | Admin creates doctor (201), non-admin rejected (403), unauthenticated (401/403) |
+
+**test_patients.py (5 tests):**
+| Test Class | Tests | Coverage |
+|---|---|---|
+| `TestListPatients` | 2 | Authenticated list (200), unauthenticated (401/403) |
+| `TestPatientProfile` | 3 | Authenticated profile (200), unauthenticated (401/403), profile returns registered username |
+
+### 6.5 Test Results
+
+```
+============================= test session starts =============================
+collected 36 items
+
+tests/integration/test_auth.py ..........                                [ 27%]
+tests/integration/test_doctors.py ......                                 [ 44%]
+tests/integration/test_patients.py .....                                 [ 58%]
+tests/unit/test_security.py ...............                              [100%]
+
+===================== 36 passed, 1758 warnings in 24.76s ======================
+```
+
+All 36 tests pass. Zero failures.
+
+---
+
+## 7. Technical Notes
+
+### 7.1 Password Hashing
 
 - `passlib[bcrypt]==1.7.4` with `bcrypt==4.0.1`
 - Cost factor: 12 (default for passlib's `CryptContext`)
 - Passwords longer than 72 bytes are silently truncated by bcrypt (per spec)
 
-### 6.2 JWT Configuration
+### 7.2 JWT Configuration
 
 - Algorithm: HS256
 - Expiry: 30 minutes (configurable via `ACCESS_TOKEN_EXPIRE_MINUTES`)
-- Payload claims: `sub` (username), `exp` (expiry timestamp)
+- Payload claims: `sub` (username), `exp` (expiry timestamp), `role` (user role string)
 - Secret key: injected via `SECRET_KEY` environment variable
+- `create_access_token()` accepts optional `extra_claims` dict for extensibility
 
-### 6.3 Database Connection Pool
+### 7.3 Database Connection Pool
 
 - `pool_size=20`, `max_overflow=10`, `pool_timeout=10s`, `pool_recycle=1800s`
 - Async session factory with `expire_on_commit=False`
 - Transactional session management via `get_db()` dependency (commit on success, rollback on exception)
 
-### 6.4 ENUM Type Handling
+### 7.4 ENUM Type Handling
 
 - `userrole`: `patient`, `doctor`, `admin`
 - `appointmentstatus`: `scheduled`, `confirmed`, `completed`, `cancelled`
@@ -193,7 +294,7 @@ All tests executed against a fresh `docker compose up -d --build` deployment.
 
 ---
 
-## 7. Phase 1 Quality Gates
+## 8. Phase 1 Quality Gates
 
 | Gate | Status |
 |---|---|
@@ -203,10 +304,14 @@ All tests executed against a fresh `docker compose up -d --build` deployment.
 | All endpoints documented in Swagger UI | **PASS** |
 | No startup errors in worker logs | **PASS** |
 | All services healthy within 60 seconds | **PASS** |
+| Unit tests pass (15/15 security tests) | **PASS** |
+| Integration tests pass (21/21 endpoint tests) | **PASS** |
+| `alg: none` JWT attack rejected | **PASS** |
+| Admin role claim embedded in JWT | **PASS** |
 
 ---
 
-## 8. Next Steps (Phase 2)
+## 9. Next Steps (Phase 2)
 
 Phase 2 will deliver the full appointment booking engine with:
 - `AppointmentRepository` — `list_all`, `get_by_id`, `create`, `check_conflict`

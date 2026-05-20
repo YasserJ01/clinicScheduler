@@ -35,7 +35,7 @@ async def register(
     if existing:
         raise HTTPException(status_code=400, detail="Username already exists")
     user = await repo.create(username=req.username, password=req.password, role=req.role)
-    token = create_access_token(subject=user.username, expires_delta=timedelta(minutes=30))
+    token = create_access_token(subject=user.username, expires_delta=timedelta(minutes=30), extra_claims={"role": req.role})
     return TokenResponse(access_token=token)
 
 
@@ -48,5 +48,5 @@ async def login(
     user = await repo.get_by_username(req.username)
     if not user or not verify_password(req.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
-    token = create_access_token(subject=user.username, expires_delta=timedelta(minutes=30))
+    token = create_access_token(subject=user.username, expires_delta=timedelta(minutes=30), extra_claims={"role": user.role.value})
     return TokenResponse(access_token=token)
