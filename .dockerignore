@@ -1,0 +1,14 @@
+__pycache__
+*.pyc
+*.pyo
+.env
+.venv
+*.egg-info
+dist
+build
+.git
+.gitignore
+*.md
+loadtest
+.vscode
+.idea

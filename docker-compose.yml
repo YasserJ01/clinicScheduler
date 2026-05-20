@@ -1,0 +1,75 @@
+version: "3.9"
+
+services:
+  nginx:
+    image: nginx:1.25-alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      worker:
+        condition: service_healthy
+    networks:
+      - clinic-net
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    deploy:
+      replicas: 3
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://clinic:clinicpass@db:5432/clinic_db
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+      - LOG_LEVEL=info
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - clinic-net
+    restart: unless-stopped
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=clinic
+      - POSTGRES_PASSWORD=clinicpass
+      - POSTGRES_DB=clinic_db
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U clinic"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - clinic-net
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - clinic-net
+    restart: unless-stopped
+
+networks:
+  clinic-net:
+    driver: bridge
+
+volumes:
+  pgdata:
