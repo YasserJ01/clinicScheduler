@@ -11,6 +11,7 @@ from app.db.session import get_db
 from app.db.repository import AppointmentRepository, DoctorRepository, PatientRepository
 from app.api.v1.dependencies import get_current_user
 from app.core.audit import audit_log
+from app.config import settings
 
 logger = logging.getLogger("clinic.appointments")
 
@@ -94,7 +95,7 @@ async def create_appointment(
 ):
     patient_id_str = str(appt.patient_id)
 
-    if patient_id_str == "999":
+    if patient_id_str == "999" and settings.CHAOS_ENABLED:
         logger.error(
             "CHAOS: Poison pill detected — patient_id=%s on node %s",
             patient_id_str,

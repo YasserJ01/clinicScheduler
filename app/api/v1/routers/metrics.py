@@ -11,4 +11,4 @@ async def get_metrics():
 
     Returns metrics in Prometheus exposition format for scraping.
     """
-    return metrics_collector.get_all_metrics()
+    return await metrics_collector.get_all_metrics()

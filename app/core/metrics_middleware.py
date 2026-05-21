@@ -18,20 +18,20 @@ class MetricsMiddleware(BaseHTTPMiddleware):
         duration = time.time() - start_time
 
         endpoint = self._normalise_endpoint(request.url.path, request.method)
-        metrics_collector.increment_request(
+        await metrics_collector.increment_request(
             request.method, endpoint, response.status_code
         )
-        metrics_collector.observe_duration(request.method, endpoint, duration)
+        await metrics_collector.observe_duration(request.method, endpoint, duration)
 
         if request.method == "POST" and request.url.path.startswith(
             "/api/v1/appointments"
         ):
             if response.status_code == 201:
-                metrics_collector.increment_booking("success")
+                await metrics_collector.increment_booking("success")
             elif response.status_code == 409:
-                metrics_collector.increment_booking("conflict")
+                await metrics_collector.increment_booking("conflict")
             else:
-                metrics_collector.increment_booking("failed")
+                await metrics_collector.increment_booking("failed")
 
         return response
 

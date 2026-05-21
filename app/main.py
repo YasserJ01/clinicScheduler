@@ -7,6 +7,7 @@ from sqlalchemy import text
 from app.config import settings
 from app.core.middleware import MessagePackMiddleware
 from app.core.metrics_middleware import MetricsMiddleware
+from app.core.request_id_middleware import RequestIDMiddleware
 from app.core.exceptions import register_exception_handlers
 from app.api.v1.routers import (
     auth,
@@ -68,6 +69,7 @@ def create_app() -> FastAPI:
 
     app.add_middleware(MessagePackMiddleware)
     app.add_middleware(MetricsMiddleware)
+    app.add_middleware(RequestIDMiddleware)
 
     register_exception_handlers(app)
 

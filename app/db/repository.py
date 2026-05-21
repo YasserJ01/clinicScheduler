@@ -33,7 +33,7 @@ class DoctorRepository:
 
     async def list_all(self) -> Sequence[Doctor]:
         result = await self.session.execute(
-            select(Doctor).where(Doctor.is_active == "true")
+            select(Doctor).where(Doctor.is_active.is_(True))
         )
         return result.scalars().all()
 
@@ -64,8 +64,10 @@ class PatientRepository:
         )
         return result.scalar_one_or_none()
 
-    async def get_or_create_by_name(self, name: str, email: str) -> Patient:
-        result = await self.session.execute(select(Patient).where(Patient.name == name))
+    async def get_or_create_by_email(self, name: str, email: str) -> Patient:
+        result = await self.session.execute(
+            select(Patient).where(Patient.email == email)
+        )
         patient = result.scalar_one_or_none()
         if not patient:
             patient = Patient(name=name, email=email)
@@ -149,10 +151,12 @@ class AppointmentRepository:
             else appointment_time
         )
         end_time = naive_time + timedelta(minutes=duration_minutes)
+        lower_bound = naive_time - timedelta(minutes=480)
 
         result = await self.session.execute(
             select(Appointment).where(
                 Appointment.doctor_id == doctor_id,
+                Appointment.appointment_time >= lower_bound,
                 Appointment.appointment_time < end_time,
                 Appointment.status != AppointmentStatus.CANCELLED,
             )

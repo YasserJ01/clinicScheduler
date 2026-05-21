@@ -28,15 +28,16 @@ docker compose down -v                # Tear down everything including DB volume
 | `app/core/middleware.py` | MessagePack serialization + `X-Response-Time` header. |
 | `app/core/circuit_breaker.py` | Circuit breaker for DB/Redis partial failure isolation. |
 | `app/core/security.py` | JWT creation (with role claim), bcrypt password hashing. |
-| `app/core/metrics.py` | Redis-backed Prometheus metrics collector. |
-| `app/core/metrics_middleware.py` | HTTP request tracking middleware. |
+| `app/core/metrics.py` | Async Redis-backed Prometheus metrics collector. |
+| `app/core/metrics_middleware.py` | HTTP request tracking middleware (async). |
+| `app/core/request_id_middleware.py` | X-Request-ID correlation header middleware. |
 | `app/core/audit.py` | Audit logging helper (DB + stdout). |
 | `nginx/nginx.conf` | NGINX config: consistent hashing, rate limiting (500r/s), retry on 502/503. |
 | `loadtest/scheduler.js` | k6 load test: 30s ramp to 50 VUs, 1m at 200 VUs, 30s ramp down. |
 | `tests/unit/test_security.py` | 15 unit tests: password hashing, JWT creation/validation, `alg: none` attack. |
 | `tests/integration/test_auth.py` | 10 integration tests: register, login, JWT validation. |
 | `tests/integration/test_doctors.py` | 6 integration tests: list doctors, create doctor (admin). |
-| `tests/integration/test_patients.py` | 5 integration tests: list patients, profile. |
+| `tests/integration/test_patients.py` | 6 integration tests: list patients, profile, real patient ID lookup. |
 | `tests/integration/test_appointments.py` | 14 integration tests: booking success/conflict/validation, list, get by ID. |
 | `tests/integration/test_concurrent_booking.py` | 1 integration test: concurrent same-slot booking (201 + 409). |
 | `tests/integration/test_timezone.py` | 5 integration tests: Z suffix, UTC offset, naive datetime, invalid strings. |
@@ -48,6 +49,9 @@ docker compose down -v                # Tear down everything including DB volume
 | `tests/integration/test_admin.py` | 7 integration tests: GDPR export (NDJSON), patient anonymisation, RBAC. |
 | `loadtest/scheduler.js` | k6 load test: read/write scenarios, 50-200 VUs, p95<500ms threshold. |
 | `docker-compose.baseline.yml` | Override file for 1-worker baseline load testing. |
+| `tests/unit/test_metrics_async.py` | 5 unit tests: async Redis calls are awaited. |
+| `tests/unit/test_conflict_query.py` | 1 unit test: SQL includes lower-bound filter. |
+| `tests/unit/test_patient_repository.py` | 3 unit tests: email-based patient lookup. |
 | `tests/conftest.py` | Pytest fixtures: HTTP client, admin/user tokens, auth headers, patient_id, future_time_slot. |
 
 ## Gotchas
@@ -60,7 +64,8 @@ docker compose down -v                # Tear down everything including DB volume
 - Node ID comes from `socket.gethostname()` — inside Docker this is the container ID.
 
 ### Chaos backdoor (FR-2)
-- `patient_id == 999` (int or string) triggers an immediate HTTP 503 with `{"detail": "CHAOS: Simulated node failure"}`.
+- `patient_id == 999` (int or string) triggers an HTTP 503 with `{"detail": "CHAOS: Simulated node failure"}` **only when `CHAOS_ENABLED=true`**.
+- Default is `CHAOS_ENABLED=false` (production-safe). Development `docker-compose.yml` sets `CHAOS_ENABLED=true`.
 - The check runs before any DB work in `app/api/v1/routers/appointments.py:create_appointment`.
 
 ### PostgreSQL ENUM types
@@ -95,8 +100,9 @@ docker compose down -v                # Tear down everything including DB volume
 - The two-step `check_conflict()` → `create()` is NOT atomic; the unique index is the final guard.
 
 ### Patient creation
-- `POST /api/v1/patients` creates or retrieves a patient by name/email (idempotent via `get_or_create_by_name`).
+- `POST /api/v1/patients` creates or retrieves a patient by email (idempotent via `get_or_create_by_email`).
 - Required before booking appointments — the booking endpoint validates patient existence.
+- `GET /api/v1/patients/me` looks up the patient by email convention (`{username}@clinic.com`) and returns the real `id` if found.
 
 ### Circuit Breaker (Phase 3)
 - `app/core/circuit_breaker.py` implements a full state machine: CLOSED → OPEN → HALF_OPEN → CLOSED.
@@ -178,16 +184,17 @@ docker compose down -v                # Tear down everything including DB volume
 - Changing key invalidates all existing JWTs (users must re-authenticate).
 - For zero-downtime rotation: implement dual-key validation with fallback period.
 
-### Alembic Migrations (Phase 6)
+### Alembic Migrations (Phase 6, updated Phase 7)
 - Development: `init_db()` uses `create_all` (default).
 - Production: set `ALEMBIC_ENABLED=true` to use Alembic.
 - Generate migration: `alembic revision --autogenerate -m "description"`
 - Apply migration: `alembic upgrade head`
-- Migrations: `alembic/versions/001_initial_schema.py`, `002_add_duration_minutes.py`
+- Migrations: `001_initial_schema`, `002_add_duration_minutes`, `003_fix_doctor_is_active_boolean`, `004_audit_log_indexes`
 
-### Prometheus Metrics (Phase 6)
+### Prometheus Metrics (Phase 6, updated Phase 7)
 - `GET /api/v1/metrics` — returns Prometheus exposition format.
 - Metrics stored in Redis (persistent across worker restarts).
+- Uses **async Redis** (`redis.asyncio`) — no event loop blocking.
 - Tracks: `http_requests_total`, `http_request_duration_seconds`, `appointment_bookings_total`, `circuit_breaker_state`.
 - No auth required (for Prometheus scraping).
 - NGINX location block added (no rate limiting).
@@ -213,6 +220,32 @@ docker compose down -v                # Tear down everything including DB volume
 - Required env vars: `SECRET_KEY`, `DB_PASSWORD`, `REDIS_PASSWORD`, `FRONTEND_URL`.
 - Memory/CPU limits configured per service.
 - Redis requires password authentication in production.
+- `CHAOS_ENABLED` defaults to `false` in production (do not set it).
+
+### Doctor `is_active` Column (Phase 7)
+- `is_active` is now a `BOOLEAN` column (was `VARCHAR(10)`).
+- `DoctorRepository.list_all()` filters on `Doctor.is_active.is_(True)`.
+- Migration `003` converts existing `"true"`/`"false"` strings to proper booleans.
+
+### Audit Log Indexes (Phase 7)
+- `ix_audit_log_actor` on `actor` — query by user
+- `ix_audit_log_entity` on `(entity_type, entity_id)` — query by entity
+- `ix_audit_log_created_at` on `created_at` — query by date range
+- Migration `004` creates these indexes.
+
+### X-Request-ID Header (Phase 7)
+- All responses include `X-Request-ID` header (UUIDv4 or forwarded from client).
+- Useful for correlating logs across NGINX, workers, and database.
+- Middleware wired in `app/main.py` after `MetricsMiddleware`.
+
+### Async Metrics (Phase 7)
+- `MetricsCollector` uses `redis.asyncio` — all methods are `async def`.
+- `MetricsMiddleware.dispatch()` awaits all metric calls.
+- No event loop blocking under load.
+
+### Conflict Query Optimization (Phase 7)
+- `check_conflict()` now includes a lower-bound filter: `appointment_time >= naive_time - 480 minutes`.
+- Prevents full-table scans on large appointment tables.
 
 ## Dev Commands
 
@@ -305,4 +338,18 @@ python -m pytest tests/integration/test_duration.py -v
 
 # Run metrics tests
 python -m pytest tests/integration/test_metrics.py -v
+
+# Run Phase 7 unit tests
+python -m pytest tests/unit/test_metrics_async.py -v
+python -m pytest tests/unit/test_conflict_query.py -v
+python -m pytest tests/unit/test_patient_repository.py -v
+
+# Verify X-Request-ID header
+python -c "import httpx; r = httpx.get('http://localhost/api/v1/health'); print(r.headers.get('X-Request-ID'))"
+
+# Verify async metrics (no blocking)
+python -c "import httpx; r = httpx.get('http://localhost/api/v1/metrics'); print(r.status_code, 'http_requests_total' in r.text)"
+
+# Verify CHAOS_ENABLED is off in production (default)
+python -c "from app.config import settings; print('CHAOS_ENABLED:', settings.CHAOS_ENABLED)"
 ```

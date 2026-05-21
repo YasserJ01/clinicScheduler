@@ -1,8 +1,10 @@
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from app.db.repository import PatientRepository
+from app.models import Patient
 from app.api.v1.dependencies import get_current_user
 
 router = APIRouter(prefix="/patients", tags=["patients"])
@@ -29,7 +31,7 @@ async def create_patient(
     db: AsyncSession = Depends(get_db),
 ):
     repo = PatientRepository(db)
-    patient = await repo.get_or_create_by_name(req.name, req.email)
+    patient = await repo.get_or_create_by_email(req.name, req.email)
     return {"id": patient.id, "name": patient.name, "email": patient.email}
 
 
@@ -48,8 +50,11 @@ async def get_my_profile(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    return {
-        "id": 0,
-        "name": current_user["user_id"],
-        "email": f"{current_user['user_id']}@clinic.com",
-    }
+    username = current_user["user_id"]
+    result = await db.execute(
+        select(Patient).where(Patient.email == f"{username}@clinic.com")
+    )
+    patient = result.scalar_one_or_none()
+    if patient:
+        return {"id": patient.id, "name": patient.name, "email": patient.email}
+    return {"id": 0, "name": username, "email": f"{username}@clinic.com"}

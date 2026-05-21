@@ -43,3 +43,29 @@ class TestPatientProfile:
         assert resp.status_code == 200
         data = resp.json()
         assert data["name"] == username
+
+    def test_get_my_profile_returns_real_patient_id(self, http_client, admin_token):
+        username = f"patient_profile_{uuid.uuid4().hex[:8]}"
+        email = f"{username}@clinic.com"
+        resp = http_client.post(
+            "/api/v1/auth/register",
+            json={"username": username, "password": "test1234"},
+        )
+        token = resp.json()["access_token"]
+
+        resp = http_client.post(
+            "/api/v1/patients",
+            json={"name": username, "email": email, "phone": "1234567890"},
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        assert resp.status_code in (200, 201)
+        created_id = resp.json()["id"]
+
+        resp = http_client.get(
+            "/api/v1/patients/me",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["id"] == created_id
+        assert data["id"] != 0

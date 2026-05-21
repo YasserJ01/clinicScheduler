@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "info"
     FRONTEND_URL: str = "*"
     ALEMBIC_ENABLED: bool = False
+    CHAOS_ENABLED: bool = False
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 
