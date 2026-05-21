@@ -6,6 +6,7 @@ from pydantic import BaseModel, field_validator
 from datetime import datetime
 from typing import Union
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 from app.db.session import get_db
 from app.db.repository import AppointmentRepository, DoctorRepository, PatientRepository
 from app.api.v1.dependencies import get_current_user
@@ -125,11 +126,34 @@ async def create_appointment(
             error=f"Patient with id {patient_id_str} not found",
         ).model_dump())
 
-    new_appt = await appt_repo.create(
-        doctor_id=appt.doctor_id,
-        patient_id=patient.id,
-        appointment_time=naive_time,
-    )
+    try:
+        new_appt = await appt_repo.create(
+            doctor_id=appt.doctor_id,
+            patient_id=patient.id,
+            appointment_time=naive_time,
+        )
+    except IntegrityError:
+        await db.rollback()
+        conflict = await appt_repo.check_conflict(appt.doctor_id, naive_time)
+        if conflict:
+            patient_repo = PatientRepository(db)
+            holder = await patient_repo.get_by_id(conflict.patient_id)
+            holder_name = holder.name if holder else "Unknown"
+            conflict_resp = BookingResponse(
+                success=False,
+                node_id=NODE_ID,
+                error=f"Slot already occupied by patient {holder_name}",
+                appointment=AppointmentDetail(
+                    id=conflict.id,
+                    doctor_id=conflict.doctor_id,
+                    patient_id=conflict.patient_id,
+                    patient_name=holder_name,
+                    time_slot=conflict.appointment_time.isoformat(),
+                    status=conflict.status.value,
+                ),
+            )
+            return JSONResponse(status_code=409, content=conflict_resp.model_dump())
+        raise
 
     logger.info("Booking created: appt_id=%s on node %s", new_appt.id, NODE_ID)
     booking = BookingResponse(

@@ -1,6 +1,7 @@
 import pytest
 import httpx
 import asyncio
+from datetime import datetime, timedelta, timezone
 
 BASE_URL = "http://localhost"
 
@@ -50,3 +51,28 @@ def auth_headers(user_token):
 @pytest.fixture
 def admin_headers(admin_token):
     return {"Authorization": f"Bearer {admin_token}"}
+
+
+@pytest.fixture(scope="session")
+def patient_id(admin_token):
+    import uuid
+    name = f"Test Patient {uuid.uuid4().hex[:8]}"
+    email = f"{uuid.uuid4().hex[:8]}@test.com"
+    resp = httpx.Client(base_url=BASE_URL, timeout=10.0).post(
+        "/api/v1/patients",
+        json={"name": name, "email": email, "phone": "1234567890"},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert resp.status_code in (200, 201)
+    return resp.json()["id"]
+
+
+@pytest.fixture(scope="session")
+def seeded_doctor_id(user_token):
+    return 1
+
+
+@pytest.fixture
+def future_time_slot():
+    future = datetime.now(timezone.utc) + timedelta(days=7, hours=10)
+    return future.strftime("%Y-%m-%dT%H:%M:%SZ")

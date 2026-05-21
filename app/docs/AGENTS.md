@@ -21,7 +21,7 @@ docker compose down -v                # Tear down everything including DB volume
 | Path | Purpose |
 |---|---|
 | `app/main.py` | FastAPI entrypoint. `lifespan` runs `init_db()` then `seed_data()` on startup. |
-| `app/db/session.py` | Async engine + session factory. `init_db()` creates ENUM types + tables. |
+| `app/db/session.py` | Async engine + session factory. `init_db()` creates ENUM types + tables + partial unique index. |
 | `app/db/repository.py` | Data access layer. All DB queries go through repository classes. |
 | `app/models/__init__.py` | SQLAlchemy models: `User`, `Doctor`, `Patient`, `Appointment`. |
 | `app/api/v1/routers/` | Route handlers: `auth`, `doctors`, `patients`, `appointments`, `health`. |
@@ -34,7 +34,10 @@ docker compose down -v                # Tear down everything including DB volume
 | `tests/integration/test_auth.py` | 10 integration tests: register, login, JWT validation. |
 | `tests/integration/test_doctors.py` | 6 integration tests: list doctors, create doctor (admin). |
 | `tests/integration/test_patients.py` | 5 integration tests: list patients, profile. |
-| `tests/conftest.py` | Pytest fixtures: HTTP client, admin/user tokens, auth headers. |
+| `tests/integration/test_appointments.py` | 14 integration tests: booking success/conflict/validation, list, get by ID. |
+| `tests/integration/test_concurrent_booking.py` | 1 integration test: concurrent same-slot booking (201 + 409). |
+| `tests/integration/test_timezone.py` | 5 integration tests: Z suffix, UTC offset, naive datetime, invalid strings. |
+| `tests/conftest.py` | Pytest fixtures: HTTP client, admin/user tokens, auth headers, patient_id, future_time_slot. |
 
 ## Gotchas
 
@@ -75,6 +78,15 @@ docker compose down -v                # Tear down everything including DB volume
 - `get_current_user` in `app/api/v1/dependencies.py` reads `payload.get("role")` for RBAC checks.
 - `create_access_token()` accepts optional `extra_claims` dict for adding custom claims.
 
+### Concurrency: Double-booking prevention
+- A partial unique index `uix_appointment_slot` is created in `init_db()` on `(doctor_id, appointment_time) WHERE status != 'cancelled'`.
+- `create_appointment` in `appointments.py` catches `IntegrityError` from concurrent inserts and returns HTTP 409.
+- The two-step `check_conflict()` → `create()` is NOT atomic; the unique index is the final guard.
+
+### Patient creation
+- `POST /api/v1/patients` creates or retrieves a patient by name/email (idempotent via `get_or_create_by_name`).
+- Required before booking appointments — the booking endpoint validates patient existence.
+
 ## Dev Commands
 
 ```bash
@@ -99,4 +111,7 @@ python -m pytest tests/ -v
 # Run specific test file
 python -m pytest tests/unit/test_security.py -v
 python -m pytest tests/integration/test_auth.py -v
+python -m pytest tests/integration/test_appointments.py -v
+python -m pytest tests/integration/test_concurrent_booking.py -v
+python -m pytest tests/integration/test_timezone.py -v
 ```

@@ -1,6 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy import text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, ProgrammingError
 from app.config import settings
 from app.models import Base
 
@@ -46,8 +46,25 @@ async def _create_enum_if_not_exists(conn, enum_name, values):
         pass
 
 
+async def _create_partial_unique_index(conn):
+    """Create a partial unique index to prevent double-booking race conditions.
+
+    This ensures that at the DB level, no two non-cancelled appointments can
+    exist for the same (doctor_id, appointment_time) combination.
+    """
+    try:
+        await conn.execute(text("""
+            CREATE UNIQUE INDEX uix_appointment_slot
+            ON appointments (doctor_id, appointment_time)
+            WHERE status != 'cancelled';
+        """))
+    except (IntegrityError, ProgrammingError):
+        pass
+
+
 async def init_db():
     async with engine.begin() as conn:
         await _create_enum_if_not_exists(conn, "userrole", ["patient", "doctor", "admin"])
         await _create_enum_if_not_exists(conn, "appointmentstatus", ["scheduled", "confirmed", "completed", "cancelled"])
         await conn.run_sync(Base.metadata.create_all)
+        await _create_partial_unique_index(conn)

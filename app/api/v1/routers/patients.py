@@ -8,12 +8,29 @@ from app.api.v1.dependencies import get_current_user
 router = APIRouter(prefix="/patients", tags=["patients"])
 
 
+class PatientCreate(BaseModel):
+    name: str
+    email: str
+    phone: str | None = None
+
+
 class PatientResponse(BaseModel):
     id: int
     name: str
     email: str
 
     model_config = {"from_attributes": True}
+
+
+@router.post("", status_code=201, response_model=PatientResponse)
+async def create_patient(
+    req: PatientCreate,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    repo = PatientRepository(db)
+    patient = await repo.get_or_create_by_name(req.name, req.email)
+    return {"id": patient.id, "name": patient.name, "email": patient.email}
 
 
 @router.get("", response_model=list[PatientResponse])
