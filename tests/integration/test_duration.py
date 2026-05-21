@@ -227,8 +227,7 @@ class TestAvailableSlots:
         )
         assert resp.status_code == 200
         body = resp.json()
-        booked_start = future_date.replace(minute=0, second=0, microsecond=0)
-        booked_slot = booked_start.strftime("%Y-%m-%dT%H:%M:%S")
+        booked_slot = future_date.strftime("%Y-%m-%dT%H:%M:%S")
         assert booked_slot not in body["available_slots"]
 
     def _create_patient(self):
