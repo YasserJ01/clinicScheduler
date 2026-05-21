@@ -1,6 +1,6 @@
 import socket
 import logging
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 from datetime import datetime, timedelta
@@ -72,15 +72,17 @@ async def list_appointments(
     for appt in appointments:
         patient_repo = PatientRepository(db)
         patient = await patient_repo.get_by_id(appt.patient_id)
-        result.append({
-            "id": appt.id,
-            "doctor_id": appt.doctor_id,
-            "patient_id": appt.patient_id,
-            "patient_name": patient.name if patient else "Unknown",
-            "time_slot": appt.appointment_time.isoformat(),
-            "duration_minutes": appt.duration_minutes,
-            "status": appt.status.value,
-        })
+        result.append(
+            {
+                "id": appt.id,
+                "doctor_id": appt.doctor_id,
+                "patient_id": appt.patient_id,
+                "patient_name": patient.name if patient else "Unknown",
+                "time_slot": appt.appointment_time.isoformat(),
+                "duration_minutes": appt.duration_minutes,
+                "status": appt.status.value,
+            }
+        )
     return result
 
 
@@ -93,7 +95,11 @@ async def create_appointment(
     patient_id_str = str(appt.patient_id)
 
     if patient_id_str == "999":
-        logger.error("CHAOS: Poison pill detected — patient_id=%s on node %s", patient_id_str, NODE_ID)
+        logger.error(
+            "CHAOS: Poison pill detected — patient_id=%s on node %s",
+            patient_id_str,
+            NODE_ID,
+        )
         raise HTTPException(status_code=503, detail="CHAOS: Simulated node failure")
 
     naive_time = _parse_time_slot(appt.time_slot)
@@ -101,14 +107,19 @@ async def create_appointment(
     doctor_repo = DoctorRepository(db)
     doctor = await doctor_repo.get_by_id(appt.doctor_id)
     if not doctor:
-        return JSONResponse(status_code=400, content=BookingResponse(
-            success=False,
-            node_id=NODE_ID,
-            error="Doctor not found",
-        ).model_dump())
+        return JSONResponse(
+            status_code=400,
+            content=BookingResponse(
+                success=False,
+                node_id=NODE_ID,
+                error="Doctor not found",
+            ).model_dump(),
+        )
 
     appt_repo = AppointmentRepository(db)
-    conflict = await appt_repo.check_conflict(appt.doctor_id, naive_time, appt.duration_minutes)
+    conflict = await appt_repo.check_conflict(
+        appt.doctor_id, naive_time, appt.duration_minutes
+    )
     if conflict:
         patient_repo = PatientRepository(db)
         holder = await patient_repo.get_by_id(conflict.patient_id)
@@ -132,11 +143,14 @@ async def create_appointment(
     patient_repo = PatientRepository(db)
     patient = await patient_repo.get_by_id(int(patient_id_str))
     if not patient:
-        return JSONResponse(status_code=404, content=BookingResponse(
-            success=False,
-            node_id=NODE_ID,
-            error=f"Patient with id {patient_id_str} not found",
-        ).model_dump())
+        return JSONResponse(
+            status_code=404,
+            content=BookingResponse(
+                success=False,
+                node_id=NODE_ID,
+                error=f"Patient with id {patient_id_str} not found",
+            ).model_dump(),
+        )
 
     try:
         new_appt = await appt_repo.create(
@@ -147,7 +161,9 @@ async def create_appointment(
         )
     except IntegrityError:
         await db.rollback()
-        conflict = await appt_repo.check_conflict(appt.doctor_id, naive_time, appt.duration_minutes)
+        conflict = await appt_repo.check_conflict(
+            appt.doctor_id, naive_time, appt.duration_minutes
+        )
         if conflict:
             patient_repo = PatientRepository(db)
             holder = await patient_repo.get_by_id(conflict.patient_id)
@@ -212,12 +228,18 @@ async def get_available_slots(
     Returns 30-minute slots from 08:00 to 17:00 that are not booked.
     """
     try:
-        target_date = datetime.fromisoformat(date.replace("Z", "+00:00")).replace(tzinfo=None)
+        target_date = datetime.fromisoformat(date.replace("Z", "+00:00")).replace(
+            tzinfo=None
+        )
     except (ValueError, AttributeError):
-        raise HTTPException(status_code=422, detail="date must be a valid ISO 8601 date string")
+        raise HTTPException(
+            status_code=422, detail="date must be a valid ISO 8601 date string"
+        )
 
     if duration_minutes < 5 or duration_minutes > 480:
-        raise HTTPException(status_code=422, detail="duration_minutes must be between 5 and 480")
+        raise HTTPException(
+            status_code=422, detail="duration_minutes must be between 5 and 480"
+        )
 
     repo = AppointmentRepository(db)
     booked = await repo.get_booked_slots(doctor_id, target_date)
@@ -244,7 +266,12 @@ async def get_available_slots(
             available.append(current.isoformat())
         current += delta
 
-    return {"doctor_id": doctor_id, "date": target_date.date().isoformat(), "duration_minutes": duration_minutes, "available_slots": available}
+    return {
+        "doctor_id": doctor_id,
+        "date": target_date.date().isoformat(),
+        "duration_minutes": duration_minutes,
+        "available_slots": available,
+    }
 
 
 @router.get("/{appointment_id}", response_model=AppointmentDetail)

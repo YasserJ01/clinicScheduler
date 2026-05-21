@@ -1,5 +1,4 @@
 import logging
-import signal
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,7 +8,15 @@ from app.config import settings
 from app.core.middleware import MessagePackMiddleware
 from app.core.metrics_middleware import MetricsMiddleware
 from app.core.exceptions import register_exception_handlers
-from app.api.v1.routers import auth, doctors, patients, appointments, health, admin, metrics
+from app.api.v1.routers import (
+    auth,
+    doctors,
+    patients,
+    appointments,
+    health,
+    admin,
+    metrics,
+)
 from app.db.session import init_db, async_session_factory, engine
 
 logging.basicConfig(level=logging.INFO)
@@ -21,10 +28,13 @@ async def seed_data():
         count = result.scalar()
         if count == 0:
             from app.models import Doctor
-            session.add_all([
-                Doctor(name="Dr. Smith", specialty="Cardiology"),
-                Doctor(name="Dr. Jones", specialty="Dermatology"),
-            ])
+
+            session.add_all(
+                [
+                    Doctor(name="Dr. Smith", specialty="Cardiology"),
+                    Doctor(name="Dr. Jones", specialty="Dermatology"),
+                ]
+            )
             await session.commit()
 
 

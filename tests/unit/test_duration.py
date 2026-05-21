@@ -1,5 +1,4 @@
 from datetime import datetime, timedelta
-import pytest
 
 
 class TestDurationOverlap:
@@ -54,7 +53,9 @@ class TestAvailableSlots:
     """Test available slot calculation logic."""
 
     @staticmethod
-    def _calculate_available(booked_ranges, slot_start, slot_end, duration_minutes, delta_minutes=30):
+    def _calculate_available(
+        booked_ranges, slot_start, slot_end, duration_minutes, delta_minutes=30
+    ):
         available = []
         current = slot_start
         delta = timedelta(minutes=delta_minutes)
@@ -99,7 +100,11 @@ class TestAvailableSlots:
         slot_start = datetime(2026, 6, 15, 8, 0)
         slot_end = datetime(2026, 6, 15, 17, 0)
 
-        available_30 = self._calculate_available(booked_ranges, slot_start, slot_end, 30)
-        available_60 = self._calculate_available(booked_ranges, slot_start, slot_end, 60)
+        available_30 = self._calculate_available(
+            booked_ranges, slot_start, slot_end, 30
+        )
+        available_60 = self._calculate_available(
+            booked_ranges, slot_start, slot_end, 60
+        )
 
         assert len(available_60) < len(available_30)

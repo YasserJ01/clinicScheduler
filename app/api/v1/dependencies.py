@@ -13,10 +13,18 @@ async def get_current_user(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     try:
-        payload = jwt.decode(credentials.credentials, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        payload = jwt.decode(
+            credentials.credentials,
+            settings.SECRET_KEY,
+            algorithms=[settings.ALGORITHM],
+        )
         user_id: str = payload.get("sub")
         if user_id is None:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token"
+            )
         return {"user_id": user_id, "role": payload.get("role", "patient")}
     except JWTError:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token decode error")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Token decode error"
+        )

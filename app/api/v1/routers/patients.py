@@ -48,4 +48,8 @@ async def get_my_profile(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    return {"id": 0, "name": current_user["user_id"], "email": f"{current_user['user_id']}@clinic.com"}
+    return {
+        "id": 0,
+        "name": current_user["user_id"],
+        "email": f"{current_user['user_id']}@clinic.com",
+    }

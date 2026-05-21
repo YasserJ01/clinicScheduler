@@ -1,5 +1,5 @@
 from typing import Sequence
-from sqlalchemy import select, or_ as sa_or
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Doctor, Patient, Appointment, User, UserRole, AppointmentStatus
 from app.core.security import get_password_hash
@@ -32,7 +32,9 @@ class DoctorRepository:
         self.session = session
 
     async def list_all(self) -> Sequence[Doctor]:
-        result = await self.session.execute(select(Doctor).where(Doctor.is_active == "true"))
+        result = await self.session.execute(
+            select(Doctor).where(Doctor.is_active == "true")
+        )
         return result.scalars().all()
 
     async def get_by_id(self, doctor_id: int) -> Doctor | None:
@@ -63,9 +65,7 @@ class PatientRepository:
         return result.scalar_one_or_none()
 
     async def get_or_create_by_name(self, name: str, email: str) -> Patient:
-        result = await self.session.execute(
-            select(Patient).where(Patient.name == name)
-        )
+        result = await self.session.execute(select(Patient).where(Patient.name == name))
         patient = result.scalar_one_or_none()
         if not patient:
             patient = Patient(name=name, email=email)
@@ -101,9 +101,17 @@ class AppointmentRepository:
         return result.scalar_one_or_none()
 
     async def create(
-        self, doctor_id: int, patient_id: int, appointment_time: datetime, duration_minutes: int = 30
+        self,
+        doctor_id: int,
+        patient_id: int,
+        appointment_time: datetime,
+        duration_minutes: int = 30,
     ) -> Appointment:
-        naive_time = appointment_time.replace(tzinfo=None) if appointment_time.tzinfo else appointment_time
+        naive_time = (
+            appointment_time.replace(tzinfo=None)
+            if appointment_time.tzinfo
+            else appointment_time
+        )
         appointment = Appointment(
             doctor_id=doctor_id,
             patient_id=patient_id,
@@ -121,19 +129,25 @@ class AppointmentRepository:
         day_start = date.replace(hour=0, minute=0, second=0, microsecond=0)
         day_end = day_start + timedelta(days=1)
         result = await self.session.execute(
-            select(Appointment).where(
+            select(Appointment)
+            .where(
                 Appointment.doctor_id == doctor_id,
                 Appointment.appointment_time >= day_start,
                 Appointment.appointment_time < day_end,
                 Appointment.status != AppointmentStatus.CANCELLED,
-            ).order_by(Appointment.appointment_time)
+            )
+            .order_by(Appointment.appointment_time)
         )
         return result.scalars().all()
 
     async def check_conflict(
         self, doctor_id: int, appointment_time: datetime, duration_minutes: int = 30
     ) -> Appointment | None:
-        naive_time = appointment_time.replace(tzinfo=None) if appointment_time.tzinfo else appointment_time
+        naive_time = (
+            appointment_time.replace(tzinfo=None)
+            if appointment_time.tzinfo
+            else appointment_time
+        )
         end_time = naive_time + timedelta(minutes=duration_minutes)
 
         result = await self.session.execute(

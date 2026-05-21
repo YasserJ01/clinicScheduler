@@ -1,14 +1,20 @@
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from jose import JWTError, jwt
+from jose import jwt
 from passlib.context import CryptContext
 from app.config import settings
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
-def create_access_token(subject: str | Any, expires_delta: timedelta | None = None, extra_claims: dict | None = None) -> str:
-    expire = datetime.now(timezone.utc) + (expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES))
+def create_access_token(
+    subject: str | Any,
+    expires_delta: timedelta | None = None,
+    extra_claims: dict | None = None,
+) -> str:
+    expire = datetime.now(timezone.utc) + (
+        expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    )
     to_encode = {"sub": str(subject), "exp": expire}
     if extra_claims:
         to_encode.update(extra_claims)

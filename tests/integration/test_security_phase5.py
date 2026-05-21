@@ -53,7 +53,10 @@ class TestSQLInjection:
         token = self._register_and_login()
         resp = self.client.post(
             "/api/v1/patients",
-            json={"name": "'; DROP TABLE patients; --", "email": f"{uuid.uuid4().hex[:8]}@test.com"},
+            json={
+                "name": "'; DROP TABLE patients; --",
+                "email": f"{uuid.uuid4().hex[:8]}@test.com",
+            },
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code in (200, 201, 422)
@@ -130,8 +133,19 @@ class TestAlgNoneAttack:
     def test_alg_none_token_rejected_on_protected_endpoint(self):
         import base64
         import json
-        header = base64.urlsafe_b64encode(json.dumps({"alg": "none", "typ": "JWT"}).encode()).rstrip(b"=").decode()
-        payload = base64.urlsafe_b64encode(json.dumps({"sub": "hacker", "role": "admin"}).encode()).rstrip(b"=").decode()
+
+        header = (
+            base64.urlsafe_b64encode(json.dumps({"alg": "none", "typ": "JWT"}).encode())
+            .rstrip(b"=")
+            .decode()
+        )
+        payload = (
+            base64.urlsafe_b64encode(
+                json.dumps({"sub": "hacker", "role": "admin"}).encode()
+            )
+            .rstrip(b"=")
+            .decode()
+        )
         fake_token = f"{header}.{payload}."
 
         resp = self.client.get(

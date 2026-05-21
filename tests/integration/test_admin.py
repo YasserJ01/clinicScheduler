@@ -98,8 +98,6 @@ class TestGDPRAnonymisation:
 
     def test_anonymise_patient_success(self):
         patient = self._create_patient()
-        original_name = patient["name"]
-        original_email = patient["email"]
 
         resp = self.client.delete(
             f"/api/v1/admin/patients/{patient['id']}",
@@ -114,7 +112,6 @@ class TestGDPRAnonymisation:
 
     def test_anonymised_patient_no_longer_identifiable(self):
         patient = self._create_patient()
-        original_email = patient["email"]
 
         self.client.delete(
             f"/api/v1/admin/patients/{patient['id']}",

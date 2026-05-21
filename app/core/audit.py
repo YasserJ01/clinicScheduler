@@ -1,6 +1,5 @@
 import logging
 import json
-from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import AuditLog
 

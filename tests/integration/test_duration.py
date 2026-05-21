@@ -20,7 +20,9 @@ class TestDurationBooking:
 
     def test_book_appointment_with_default_duration(self):
         patient = self._create_patient()
-        future = datetime.now(timezone.utc) + timedelta(days=50 + self._unique_offset, hours=10)
+        future = datetime.now(timezone.utc) + timedelta(
+            days=50 + self._unique_offset, hours=10
+        )
         time_slot = future.strftime("%Y-%m-%dT%H:%M:%SZ")
 
         resp = self.client.post(
@@ -38,7 +40,9 @@ class TestDurationBooking:
 
     def test_book_appointment_with_custom_duration(self):
         patient = self._create_patient()
-        future = datetime.now(timezone.utc) + timedelta(days=51 + self._unique_offset, hours=10)
+        future = datetime.now(timezone.utc) + timedelta(
+            days=51 + self._unique_offset, hours=10
+        )
         time_slot = future.strftime("%Y-%m-%dT%H:%M:%SZ")
 
         resp = self.client.post(
@@ -83,7 +87,9 @@ class TestDurationBooking:
 
     def test_overlapping_duration_conflicts(self):
         patient = self._create_patient()
-        base_time = datetime.now(timezone.utc) + timedelta(days=52 + self._unique_offset, hours=10)
+        base_time = datetime.now(timezone.utc) + timedelta(
+            days=52 + self._unique_offset, hours=10
+        )
 
         resp1 = self.client.post(
             "/api/v1/appointments",
@@ -113,7 +119,9 @@ class TestDurationBooking:
 
     def test_non_overlapping_duration_succeeds(self):
         patient = self._create_patient()
-        base_time = datetime.now(timezone.utc) + timedelta(days=53 + self._unique_offset, hours=10)
+        base_time = datetime.now(timezone.utc) + timedelta(
+            days=53 + self._unique_offset, hours=10
+        )
 
         resp1 = self.client.post(
             "/api/v1/appointments",
@@ -176,7 +184,9 @@ class TestAvailableSlots:
         self.client.close()
 
     def test_available_slots_returns_slots(self):
-        future_date = (datetime.now(timezone.utc) + timedelta(days=100 + self._unique_offset)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        future_date = (
+            datetime.now(timezone.utc) + timedelta(days=100 + self._unique_offset)
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         resp = self.client.get(
             "/api/v1/appointments/available",
@@ -193,7 +203,9 @@ class TestAvailableSlots:
 
     def test_available_slots_reduces_when_booked(self):
         patient = self._create_patient()
-        future_date = datetime.now(timezone.utc) + timedelta(days=101 + self._unique_offset, hours=10)
+        future_date = datetime.now(timezone.utc) + timedelta(
+            days=101 + self._unique_offset, hours=10
+        )
 
         resp_book = self.client.post(
             "/api/v1/appointments",

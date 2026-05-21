@@ -9,7 +9,11 @@ class MessagePackMiddleware(BaseHTTPMiddleware):
         accept = request.headers.get("accept", "")
         content_type = request.headers.get("content-type", "")
 
-        if "application/x-msgpack" in content_type and request.method in ("POST", "PUT", "PATCH"):
+        if "application/x-msgpack" in content_type and request.method in (
+            "POST",
+            "PUT",
+            "PATCH",
+        ):
             body = await request.body()
             try:
                 request._msgpack_data = msgpack.unpackb(body, raw=False)
@@ -20,7 +24,7 @@ class MessagePackMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         elapsed = time.monotonic() - start_time
 
-        response.headers["X-Response-Time"] = f"{elapsed*1000:.2f}ms"
+        response.headers["X-Response-Time"] = f"{elapsed * 1000:.2f}ms"
 
         if "application/x-msgpack" in accept:
             body_bytes = b""
@@ -28,6 +32,7 @@ class MessagePackMiddleware(BaseHTTPMiddleware):
                 body_bytes += chunk
             try:
                 import json
+
                 data = json.loads(body_bytes)
                 packed = msgpack.packb(data, use_bin_type=True)
                 return Response(

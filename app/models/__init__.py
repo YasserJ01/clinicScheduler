@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, DateTime, Enum as SAEnum, ForeignKey, Text
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text
 from sqlalchemy.orm import DeclarativeBase, relationship
 from sqlalchemy.dialects.postgresql import ENUM
 import enum
@@ -22,7 +22,12 @@ class User(Base):
     username = Column(String(100), unique=True, nullable=False, index=True)
     hashed_password = Column(String(255), nullable=False)
     role = Column(
-        ENUM(UserRole, name="userrole", create_type=False, values_callable=lambda x: [e.value for e in x]),
+        ENUM(
+            UserRole,
+            name="userrole",
+            create_type=False,
+            values_callable=lambda x: [e.value for e in x],
+        ),
         nullable=False,
         default=UserRole.PATIENT,
     )
@@ -69,7 +74,12 @@ class Appointment(Base):
     appointment_time = Column(DateTime, nullable=False, index=True)
     duration_minutes = Column(Integer, nullable=False, default=30)
     status = Column(
-        ENUM(AppointmentStatus, name="appointmentstatus", create_type=False, values_callable=lambda x: [e.value for e in x]),
+        ENUM(
+            AppointmentStatus,
+            name="appointmentstatus",
+            create_type=False,
+            values_callable=lambda x: [e.value for e in x],
+        ),
         nullable=False,
         default=AppointmentStatus.SCHEDULED,
     )

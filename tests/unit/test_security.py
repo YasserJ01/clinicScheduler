@@ -48,30 +48,43 @@ class TestAccessToken:
 
     def test_token_contains_sub_claim(self):
         token = create_access_token(subject="testuser")
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        payload = jwt.decode(
+            token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
+        )
         assert payload["sub"] == "testuser"
 
     def test_token_contains_exp_claim(self):
         token = create_access_token(subject="testuser")
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        payload = jwt.decode(
+            token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
+        )
         assert "exp" in payload
 
     def test_token_expiry_is_in_future(self):
         from datetime import datetime, timezone
+
         token = create_access_token(subject="testuser")
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        payload = jwt.decode(
+            token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
+        )
         assert payload["exp"] > datetime.now(timezone.utc).timestamp()
 
     def test_custom_expiry(self):
-        from datetime import datetime, timezone, timedelta
-        token = create_access_token(subject="testuser", expires_delta=timedelta(minutes=5))
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        from datetime import datetime, timezone
+
+        token = create_access_token(
+            subject="testuser", expires_delta=timedelta(minutes=5)
+        )
+        payload = jwt.decode(
+            token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
+        )
         now = datetime.now(timezone.utc).timestamp()
         assert payload["exp"] - now < 310
 
     def test_expired_token_raises_error(self):
-        from datetime import timedelta
-        token = create_access_token(subject="testuser", expires_delta=timedelta(seconds=-1))
+        token = create_access_token(
+            subject="testuser", expires_delta=timedelta(seconds=-1)
+        )
         with pytest.raises(Exception):
             jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
 
@@ -88,8 +101,12 @@ class TestAccessToken:
 
     def test_alg_none_attack_rejected(self):
         from datetime import datetime, timezone
+
         header = jwt.encode({"alg": "none"}, "unused")
-        payload = jwt.encode({"sub": "admin", "exp": datetime.now(timezone.utc).timestamp() + 3600}, "unused")
+        payload = jwt.encode(
+            {"sub": "admin", "exp": datetime.now(timezone.utc).timestamp() + 3600},
+            "unused",
+        )
         forged = f"{header}.{payload}."
         with pytest.raises(Exception):
             jwt.decode(forged, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])

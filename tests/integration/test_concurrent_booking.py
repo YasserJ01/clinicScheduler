@@ -1,4 +1,3 @@
-import pytest
 import httpx
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -6,7 +5,9 @@ from datetime import datetime, timedelta, timezone
 
 
 class TestConcurrentBooking:
-    def test_concurrent_same_slot_one_succeeds(self, auth_headers, patient_id, seeded_doctor_id):
+    def test_concurrent_same_slot_one_succeeds(
+        self, auth_headers, patient_id, seeded_doctor_id
+    ):
         """Two simultaneous requests for the same slot: one gets 201, one gets 409."""
         uid = uuid.uuid4().hex[:8]
         hour = int(uid[:2], 16) % 24
@@ -14,7 +15,9 @@ class TestConcurrentBooking:
         second = int(uid[4:6], 16) % 60
         day_offset = int(uid[6:8], 16) % 200
         future_date = datetime.now(timezone.utc) + timedelta(days=150 + day_offset)
-        concurrent_slot = future_date.strftime(f"%Y-%m-%dT{hour:02d}:{minute:02d}:{second:02d}Z")
+        concurrent_slot = future_date.strftime(
+            f"%Y-%m-%dT{hour:02d}:{minute:02d}:{second:02d}Z"
+        )
         payload = {
             "doctor_id": seeded_doctor_id,
             "patient_id": patient_id,
@@ -25,9 +28,9 @@ class TestConcurrentBooking:
         with ThreadPoolExecutor(max_workers=2) as executor:
             futures = []
             for _ in range(2):
-                futures.append(executor.submit(
-                    self._book_appointment, payload, auth_headers
-                ))
+                futures.append(
+                    executor.submit(self._book_appointment, payload, auth_headers)
+                )
             for future in as_completed(futures):
                 results.append(future.result())
 
@@ -47,11 +50,14 @@ class TestConcurrentBooking:
         assert list_resp.status_code == 200
         appointments = list_resp.json()
         matching = [
-            a for a in appointments
+            a
+            for a in appointments
             if a["time_slot"].startswith(concurrent_slot.rstrip("Z"))
             and a["doctor_id"] == seeded_doctor_id
         ]
-        assert len(matching) == 1, f"Expected exactly 1 appointment, found {len(matching)}"
+        assert len(matching) == 1, (
+            f"Expected exactly 1 appointment, found {len(matching)}"
+        )
 
     @staticmethod
     def _book_appointment(payload, headers):

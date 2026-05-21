@@ -41,4 +41,8 @@ async def create_doctor(
         raise HTTPException(status_code=403, detail="Admin access required")
     repo = DoctorRepository(db)
     new_doctor = await repo.create(name=doctor.name, specialty=doctor.specialty)
-    return {"id": new_doctor.id, "name": new_doctor.name, "specialty": new_doctor.specialty}
+    return {
+        "id": new_doctor.id,
+        "name": new_doctor.name,
+        "specialty": new_doctor.specialty,
+    }

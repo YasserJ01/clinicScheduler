@@ -1,5 +1,5 @@
 from datetime import timedelta
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
@@ -41,8 +41,14 @@ async def register(
     existing = await repo.get_by_username(req.username)
     if existing:
         raise HTTPException(status_code=400, detail="Username already exists")
-    user = await repo.create(username=req.username, password=req.password, role=req.role)
-    token = create_access_token(subject=user.username, expires_delta=timedelta(minutes=30), extra_claims={"role": req.role})
+    user = await repo.create(
+        username=req.username, password=req.password, role=req.role
+    )
+    token = create_access_token(
+        subject=user.username,
+        expires_delta=timedelta(minutes=30),
+        extra_claims={"role": req.role},
+    )
     return TokenResponse(access_token=token)
 
 
@@ -55,5 +61,9 @@ async def login(
     user = await repo.get_by_username(req.username)
     if not user or not verify_password(req.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
-    token = create_access_token(subject=user.username, expires_delta=timedelta(minutes=30), extra_claims={"role": user.role.value})
+    token = create_access_token(
+        subject=user.username,
+        expires_delta=timedelta(minutes=30),
+        extra_claims={"role": user.role.value},
+    )
     return TokenResponse(access_token=token)

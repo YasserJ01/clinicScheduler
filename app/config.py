@@ -2,7 +2,9 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    DATABASE_URL: str = "postgresql+asyncpg://clinic:clinicpass@localhost:5432/clinic_db"
+    DATABASE_URL: str = (
+        "postgresql+asyncpg://clinic:clinicpass@localhost:5432/clinic_db"
+    )
     REDIS_URL: str = "redis://localhost:6379/0"
     SECRET_KEY: str = "change-me-in-production"
     ALGORITHM: str = "HS256"

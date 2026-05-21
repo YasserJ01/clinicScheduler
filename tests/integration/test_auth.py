@@ -1,4 +1,3 @@
-import pytest
 import uuid
 
 
@@ -100,6 +99,7 @@ class TestJWTValidation:
     def test_protected_endpoint_with_expired_token(self, http_client):
         from app.core.security import create_access_token
         from datetime import timedelta
+
         expired_token = create_access_token(
             subject="expired_user", expires_delta=timedelta(seconds=-10)
         )

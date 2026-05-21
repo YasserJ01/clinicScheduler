@@ -1,5 +1,3 @@
-import pytest
-import httpx
 from app.core.circuit_breaker import db_breaker, redis_breaker, CircuitState
 
 

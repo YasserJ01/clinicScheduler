@@ -1,7 +1,3 @@
-import pytest
-import uuid
-
-
 class TestListDoctors:
     def test_list_doctors_authenticated(self, http_client, auth_headers):
         resp = http_client.get("/api/v1/doctors", headers=auth_headers)

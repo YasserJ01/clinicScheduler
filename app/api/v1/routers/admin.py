@@ -15,7 +15,9 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 
 def _require_admin(current_user: dict) -> None:
     if current_user["role"] != "admin":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required"
+        )
 
 
 async def _patient_ndjson(patient_id: int, db: AsyncSession):
@@ -25,28 +27,44 @@ async def _patient_ndjson(patient_id: int, db: AsyncSession):
     if not patient:
         return
 
-    yield json.dumps({
-        "type": "patient",
-        "id": patient.id,
-        "name": patient.name,
-        "email": patient.email,
-        "phone": patient.phone,
-        "created_at": patient.created_at.isoformat() if patient.created_at else None,
-    }) + "\n"
+    yield (
+        json.dumps(
+            {
+                "type": "patient",
+                "id": patient.id,
+                "name": patient.name,
+                "email": patient.email,
+                "phone": patient.phone,
+                "created_at": patient.created_at.isoformat()
+                if patient.created_at
+                else None,
+            }
+        )
+        + "\n"
+    )
 
     appt_repo = AppointmentRepository(db)
     all_appointments = await appt_repo.list_all()
     for appt in all_appointments:
         if appt.patient_id == patient_id:
-            yield json.dumps({
-                "type": "appointment",
-                "id": appt.id,
-                "doctor_id": appt.doctor_id,
-                "appointment_time": appt.appointment_time.isoformat() if appt.appointment_time else None,
-                "status": appt.status.value,
-                "notes": appt.notes,
-                "created_at": appt.created_at.isoformat() if appt.created_at else None,
-            }) + "\n"
+            yield (
+                json.dumps(
+                    {
+                        "type": "appointment",
+                        "id": appt.id,
+                        "doctor_id": appt.doctor_id,
+                        "appointment_time": appt.appointment_time.isoformat()
+                        if appt.appointment_time
+                        else None,
+                        "status": appt.status.value,
+                        "notes": appt.notes,
+                        "created_at": appt.created_at.isoformat()
+                        if appt.created_at
+                        else None,
+                    }
+                )
+                + "\n"
+            )
 
 
 @router.get("/patients/{patient_id}/export")
@@ -66,7 +84,9 @@ async def export_patient_data(
     return StreamingResponse(
         _patient_ndjson(patient_id, db),
         media_type="application/x-ndjson",
-        headers={"Content-Disposition": f'attachment; filename="patient_{patient_id}_export.ndjson"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="patient_{patient_id}_export.ndjson"'
+        },
     )
 
 

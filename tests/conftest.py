@@ -22,6 +22,7 @@ def http_client():
 @pytest.fixture(scope="session")
 def admin_token(http_client):
     import uuid
+
     username = f"admin_test_{uuid.uuid4().hex[:8]}"
     resp = http_client.post(
         "/api/v1/auth/register",
@@ -34,6 +35,7 @@ def admin_token(http_client):
 @pytest.fixture(scope="session")
 def user_token(http_client):
     import uuid
+
     username = f"user_test_{uuid.uuid4().hex[:8]}"
     resp = http_client.post(
         "/api/v1/auth/register",
@@ -56,6 +58,7 @@ def admin_headers(admin_token):
 @pytest.fixture(scope="session")
 def patient_id(admin_token):
     import uuid
+
     name = f"Test Patient {uuid.uuid4().hex[:8]}"
     email = f"{uuid.uuid4().hex[:8]}@test.com"
     resp = httpx.Client(base_url=BASE_URL, timeout=10.0).post(
@@ -75,6 +78,7 @@ def seeded_doctor_id(user_token):
 @pytest.fixture
 def future_time_slot():
     import uuid
+
     unique_days = int(uuid.uuid4().hex[:4], 16) % 300
     future = datetime.now(timezone.utc) + timedelta(days=50 + unique_days, hours=10)
     return future.strftime("%Y-%m-%dT%H:%M:%SZ")

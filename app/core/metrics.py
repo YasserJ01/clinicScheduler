@@ -1,7 +1,4 @@
-import time
 import logging
-from collections import defaultdict
-from typing import Dict, Any
 
 import redis
 
@@ -37,7 +34,9 @@ class MetricsCollector:
         self.redis.incr(count_key)
 
         bucket = self._duration_bucket(duration)
-        bucket_key = self._key("http_request_duration_bucket", method, endpoint, str(bucket))
+        bucket_key = self._key(
+            "http_request_duration_bucket", method, endpoint, str(bucket)
+        )
         self.redis.incr(bucket_key)
 
     def _duration_bucket(self, duration: float) -> str:
@@ -71,10 +70,14 @@ class MetricsCollector:
             endpoint = parts[3]
             status = parts[4]
             value = self.redis.get(key) or "0"
-            lines.append(f'http_requests_total{{method="{method}",endpoint="{endpoint}",status="{status}"}} {value}')
+            lines.append(
+                f'http_requests_total{{method="{method}",endpoint="{endpoint}",status="{status}"}} {value}'
+            )
 
         lines.append("")
-        lines.append("# HELP http_request_duration_seconds HTTP request duration in seconds")
+        lines.append(
+            "# HELP http_request_duration_seconds HTTP request duration in seconds"
+        )
         lines.append("# TYPE http_request_duration_seconds histogram")
         for key in self.redis.keys(self._key("http_request_duration_bucket", "*")):
             parts = key.split(":")
@@ -84,7 +87,9 @@ class MetricsCollector:
             endpoint = parts[3]
             bucket = parts[4]
             value = self.redis.get(key) or "0"
-            lines.append(f'http_request_duration_seconds_bucket{{method="{method}",endpoint="{endpoint}",{bucket}}} {value}')
+            lines.append(
+                f'http_request_duration_seconds_bucket{{method="{method}",endpoint="{endpoint}",{bucket}}} {value}'
+            )
 
         for key in self.redis.keys(self._key("http_request_duration_sum", "*")):
             parts = key.split(":")
@@ -93,7 +98,9 @@ class MetricsCollector:
             method = parts[2]
             endpoint = parts[3]
             value = self.redis.get(key) or "0"
-            lines.append(f'http_request_duration_seconds_sum{{method="{method}",endpoint="{endpoint}"}} {value}')
+            lines.append(
+                f'http_request_duration_seconds_sum{{method="{method}",endpoint="{endpoint}"}} {value}'
+            )
 
         for key in self.redis.keys(self._key("http_request_duration_count", "*")):
             parts = key.split(":")
@@ -102,10 +109,14 @@ class MetricsCollector:
             method = parts[2]
             endpoint = parts[3]
             value = self.redis.get(key) or "0"
-            lines.append(f'http_request_duration_seconds_count{{method="{method}",endpoint="{endpoint}"}} {value}')
+            lines.append(
+                f'http_request_duration_seconds_count{{method="{method}",endpoint="{endpoint}"}} {value}'
+            )
 
         lines.append("")
-        lines.append("# HELP appointment_bookings_total Total number of appointment bookings")
+        lines.append(
+            "# HELP appointment_bookings_total Total number of appointment bookings"
+        )
         lines.append("# TYPE appointment_bookings_total counter")
         for key in self.redis.keys(self._key("appointment_bookings_total", "*")):
             parts = key.split(":")
@@ -116,7 +127,9 @@ class MetricsCollector:
             lines.append(f'appointment_bookings_total{{status="{status}"}} {value}')
 
         lines.append("")
-        lines.append("# HELP circuit_breaker_state Circuit breaker state (0=CLOSED, 1=OPEN, 2=HALF_OPEN)")
+        lines.append(
+            "# HELP circuit_breaker_state Circuit breaker state (0=CLOSED, 1=OPEN, 2=HALF_OPEN)"
+        )
         lines.append("# TYPE circuit_breaker_state gauge")
         for key in self.redis.keys(self._key("circuit_breaker_state", "*")):
             parts = key.split(":")
