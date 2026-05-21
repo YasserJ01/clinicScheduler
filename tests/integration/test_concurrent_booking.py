@@ -2,6 +2,7 @@ import pytest
 import httpx
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta, timezone
 
 
 class TestConcurrentBooking:
@@ -11,7 +12,9 @@ class TestConcurrentBooking:
         hour = int(uid[:2], 16) % 24
         minute = int(uid[2:4], 16) % 60
         second = int(uid[4:6], 16) % 60
-        concurrent_slot = f"2027-04-01T{hour:02d}:{minute:02d}:{second:02d}Z"
+        day_offset = int(uid[6:8], 16) % 200
+        future_date = datetime.now(timezone.utc) + timedelta(days=150 + day_offset)
+        concurrent_slot = future_date.strftime(f"%Y-%m-%dT{hour:02d}:{minute:02d}:{second:02d}Z")
         payload = {
             "doctor_id": seeded_doctor_id,
             "patient_id": patient_id,

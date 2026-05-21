@@ -8,7 +8,10 @@ def _unique_time():
     hour = int(uid[:2], 16) % 24
     minute = int(uid[2:4], 16) % 60
     second = int(uid[4:6], 16) % 60
-    return f"2027-05-01T{hour:02d}:{minute:02d}:{second:02d}Z"
+    day_offset = int(uid[6:8], 16) % 200
+    from datetime import datetime, timedelta, timezone
+    future_date = datetime.now(timezone.utc) + timedelta(days=100 + day_offset)
+    return future_date.strftime(f"%Y-%m-%dT{hour:02d}:{minute:02d}:{second:02d}Z")
 
 
 class TestTimezoneHandling:

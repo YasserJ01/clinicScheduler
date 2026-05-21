@@ -63,8 +63,22 @@ async def _create_partial_unique_index(conn):
 
 
 async def init_db():
-    async with engine.begin() as conn:
-        await _create_enum_if_not_exists(conn, "userrole", ["patient", "doctor", "admin"])
-        await _create_enum_if_not_exists(conn, "appointmentstatus", ["scheduled", "confirmed", "completed", "cancelled"])
-        await conn.run_sync(Base.metadata.create_all)
-        await _create_partial_unique_index(conn)
+    if settings.ALEMBIC_ENABLED:
+        await _run_alembic_migrations()
+    else:
+        async with engine.begin() as conn:
+            await _create_enum_if_not_exists(conn, "userrole", ["patient", "doctor", "admin"])
+            await _create_enum_if_not_exists(conn, "appointmentstatus", ["scheduled", "confirmed", "completed", "cancelled"])
+            await conn.run_sync(Base.metadata.create_all)
+            await _create_partial_unique_index(conn)
+
+
+async def _run_alembic_migrations():
+    """Run Alembic migrations for production deployments."""
+    from alembic.config import Config
+    from alembic import command
+    import os
+
+    alembic_cfg = Config(os.path.join(os.path.dirname(os.path.dirname(__file__)), "..", "alembic.ini"))
+    alembic_cfg.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+    command.upgrade(alembic_cfg, "head")

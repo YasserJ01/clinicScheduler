@@ -1,9 +1,9 @@
 from typing import Sequence
-from sqlalchemy import select
+from sqlalchemy import select, or_ as sa_or
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Doctor, Patient, Appointment, User, UserRole, AppointmentStatus
 from app.core.security import get_password_hash
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 class UserRepository:
@@ -101,28 +101,53 @@ class AppointmentRepository:
         return result.scalar_one_or_none()
 
     async def create(
-        self, doctor_id: int, patient_id: int, appointment_time: datetime
+        self, doctor_id: int, patient_id: int, appointment_time: datetime, duration_minutes: int = 30
     ) -> Appointment:
         naive_time = appointment_time.replace(tzinfo=None) if appointment_time.tzinfo else appointment_time
         appointment = Appointment(
             doctor_id=doctor_id,
             patient_id=patient_id,
             appointment_time=naive_time,
+            duration_minutes=duration_minutes,
             status=AppointmentStatus.SCHEDULED,
         )
         self.session.add(appointment)
         await self.session.flush()
         return appointment
 
-    async def check_conflict(
-        self, doctor_id: int, appointment_time: datetime
-    ) -> Appointment | None:
-        naive_time = appointment_time.replace(tzinfo=None) if appointment_time.tzinfo else appointment_time
+    async def get_booked_slots(
+        self, doctor_id: int, date: datetime
+    ) -> Sequence[Appointment]:
+        day_start = date.replace(hour=0, minute=0, second=0, microsecond=0)
+        day_end = day_start + timedelta(days=1)
         result = await self.session.execute(
             select(Appointment).where(
                 Appointment.doctor_id == doctor_id,
-                Appointment.appointment_time == naive_time,
+                Appointment.appointment_time >= day_start,
+                Appointment.appointment_time < day_end,
+                Appointment.status != AppointmentStatus.CANCELLED,
+            ).order_by(Appointment.appointment_time)
+        )
+        return result.scalars().all()
+
+    async def check_conflict(
+        self, doctor_id: int, appointment_time: datetime, duration_minutes: int = 30
+    ) -> Appointment | None:
+        naive_time = appointment_time.replace(tzinfo=None) if appointment_time.tzinfo else appointment_time
+        end_time = naive_time + timedelta(minutes=duration_minutes)
+
+        result = await self.session.execute(
+            select(Appointment).where(
+                Appointment.doctor_id == doctor_id,
+                Appointment.appointment_time < end_time,
                 Appointment.status != AppointmentStatus.CANCELLED,
             )
         )
-        return result.scalar_one_or_none()
+        appointments = result.scalars().all()
+
+        for appt in appointments:
+            appt_end = appt.appointment_time + timedelta(minutes=appt.duration_minutes)
+            if naive_time < appt_end:
+                return appt
+
+        return None

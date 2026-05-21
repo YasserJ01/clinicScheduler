@@ -24,10 +24,13 @@ docker compose down -v                # Tear down everything including DB volume
 | `app/db/session.py` | Async engine + session factory. `init_db()` creates ENUM types + tables + partial unique index. |
 | `app/db/repository.py` | Data access layer. All DB queries go through repository classes. |
 | `app/models/__init__.py` | SQLAlchemy models: `User`, `Doctor`, `Patient`, `Appointment`, `AuditLog`. |
-| `app/api/v1/routers/` | Route handlers: `auth`, `doctors`, `patients`, `appointments`, `health`, `admin`. |
+| `app/api/v1/routers/` | Route handlers: `auth`, `doctors`, `patients`, `appointments`, `health`, `admin`, `metrics`. |
 | `app/core/middleware.py` | MessagePack serialization + `X-Response-Time` header. |
 | `app/core/circuit_breaker.py` | Circuit breaker for DB/Redis partial failure isolation. |
 | `app/core/security.py` | JWT creation (with role claim), bcrypt password hashing. |
+| `app/core/metrics.py` | Redis-backed Prometheus metrics collector. |
+| `app/core/metrics_middleware.py` | HTTP request tracking middleware. |
+| `app/core/audit.py` | Audit logging helper (DB + stdout). |
 | `nginx/nginx.conf` | NGINX config: consistent hashing, rate limiting (500r/s), retry on 502/503. |
 | `loadtest/scheduler.js` | k6 load test: 30s ramp to 50 VUs, 1m at 200 VUs, 30s ramp down. |
 | `tests/unit/test_security.py` | 15 unit tests: password hashing, JWT creation/validation, `alg: none` attack. |
@@ -175,6 +178,42 @@ docker compose down -v                # Tear down everything including DB volume
 - Changing key invalidates all existing JWTs (users must re-authenticate).
 - For zero-downtime rotation: implement dual-key validation with fallback period.
 
+### Alembic Migrations (Phase 6)
+- Development: `init_db()` uses `create_all` (default).
+- Production: set `ALEMBIC_ENABLED=true` to use Alembic.
+- Generate migration: `alembic revision --autogenerate -m "description"`
+- Apply migration: `alembic upgrade head`
+- Migrations: `alembic/versions/001_initial_schema.py`, `002_add_duration_minutes.py`
+
+### Prometheus Metrics (Phase 6)
+- `GET /api/v1/metrics` — returns Prometheus exposition format.
+- Metrics stored in Redis (persistent across worker restarts).
+- Tracks: `http_requests_total`, `http_request_duration_seconds`, `appointment_bookings_total`, `circuit_breaker_state`.
+- No auth required (for Prometheus scraping).
+- NGINX location block added (no rate limiting).
+
+### Appointment Duration (Phase 6)
+- `duration_minutes` field on appointments (default: 30, range: 5-480).
+- Conflict detection uses range overlap: `new_start < existing_end AND new_end > existing_start`.
+- `GET /api/v1/appointments/available?doctor_id=1&date=2026-06-15T00:00:00Z&duration_minutes=30` returns available slots.
+- Available slots: 30-minute intervals from 08:00 to 17:00, excluding booked ranges.
+
+### Graceful Shutdown (Phase 6)
+- Dockerfile uses `--timeout-graceful-shutdown 10`.
+- `lifespan` shutdown disposes engine (closes DB pool).
+- Production: `stop_grace_period: 15s` in `docker-compose.prod.yml`.
+
+### CI/CD Pipeline (Phase 6)
+- `.github/workflows/ci.yml` runs on push/PR to `main`.
+- Stages: lint (ruff), security (bandit), unit tests, integration tests.
+- Integration tests use GitHub Actions services for Postgres + Redis.
+
+### Production Deployment (Phase 6)
+- Use `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d`.
+- Required env vars: `SECRET_KEY`, `DB_PASSWORD`, `REDIS_PASSWORD`, `FRONTEND_URL`.
+- Memory/CPU limits configured per service.
+- Redis requires password authentication in production.
+
 ## Dev Commands
 
 ```bash
@@ -244,4 +283,26 @@ curl -s -X DELETE -H "Authorization: Bearer <admin_token>" http://localhost/api/
 
 # Set CORS to specific origin
 FRONTEND_URL=https://app.clinic.example.com docker compose up -d
+
+# Run Alembic migrations (production)
+ALEMBIC_ENABLED=true docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+# Generate new Alembic migration
+alembic revision --autogenerate -m "description"
+
+# Apply Alembic migrations
+alembic upgrade head
+
+# Check Prometheus metrics
+curl -s http://localhost/api/v1/metrics
+
+# Run production stack
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+# Run duration tests
+python -m pytest tests/unit/test_duration.py -v
+python -m pytest tests/integration/test_duration.py -v
+
+# Run metrics tests
+python -m pytest tests/integration/test_metrics.py -v
 ```

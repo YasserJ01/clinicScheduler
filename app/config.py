@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     LOG_LEVEL: str = "info"
     FRONTEND_URL: str = "*"
+    ALEMBIC_ENABLED: bool = False
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

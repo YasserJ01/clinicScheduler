@@ -1,5 +1,6 @@
 import pytest
 import httpx
+from datetime import datetime, timedelta, timezone
 
 
 class TestBookAppointment:
@@ -91,11 +92,14 @@ class TestBookAppointment:
 
     def test_node_id_reflects_hostname(self, http_client, auth_headers, patient_id, seeded_doctor_id):
         import uuid
+        from datetime import datetime, timedelta, timezone
         uid = uuid.uuid4().hex[:8]
         hour = int(uid[:2], 16) % 24
         minute = int(uid[2:4], 16) % 60
         second = int(uid[4:6], 16) % 60
-        unique_slot = f"2027-02-20T{hour:02d}:{minute:02d}:{second:02d}Z"
+        day_offset = int(uid[6:8], 16) % 200
+        future_date = datetime.now(timezone.utc) + timedelta(days=200 + day_offset)
+        unique_slot = future_date.strftime(f"%Y-%m-%dT{hour:02d}:{minute:02d}:{second:02d}Z")
         resp = http_client.post(
             "/api/v1/appointments",
             headers=auth_headers,
@@ -133,7 +137,9 @@ class TestGetAppointment:
         hour = int(uid[:2], 16) % 24
         minute = int(uid[2:4], 16) % 60
         second = int(uid[4:6], 16) % 60
-        unique_slot = f"2027-03-10T{hour:02d}:{minute:02d}:{second:02d}Z"
+        day_offset = int(uid[6:8], 16) % 200
+        future_date = datetime.now(timezone.utc) + timedelta(days=250 + day_offset)
+        unique_slot = future_date.strftime(f"%Y-%m-%dT{hour:02d}:{minute:02d}:{second:02d}Z")
         create_resp = http_client.post(
             "/api/v1/appointments",
             headers=auth_headers,

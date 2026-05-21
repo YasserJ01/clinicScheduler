@@ -3,7 +3,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Union
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
@@ -23,6 +23,7 @@ class AppointmentCreate(BaseModel):
     doctor_id: int
     patient_id: Union[int, str]
     time_slot: str
+    duration_minutes: int = 30
 
     @field_validator("time_slot")
     @classmethod
@@ -33,6 +34,13 @@ class AppointmentCreate(BaseModel):
             raise ValueError("time_slot must be a valid ISO 8601 datetime string")
         return v
 
+    @field_validator("duration_minutes")
+    @classmethod
+    def validate_duration(cls, v: int) -> int:
+        if v < 5 or v > 480:
+            raise ValueError("duration_minutes must be between 5 and 480 (8 hours)")
+        return v
+
 
 class AppointmentDetail(BaseModel):
     id: int
@@ -40,6 +48,7 @@ class AppointmentDetail(BaseModel):
     patient_id: int
     patient_name: str
     time_slot: str
+    duration_minutes: int = 30
     status: str
 
     model_config = {"from_attributes": True}
@@ -69,6 +78,7 @@ async def list_appointments(
             "patient_id": appt.patient_id,
             "patient_name": patient.name if patient else "Unknown",
             "time_slot": appt.appointment_time.isoformat(),
+            "duration_minutes": appt.duration_minutes,
             "status": appt.status.value,
         })
     return result
@@ -98,7 +108,7 @@ async def create_appointment(
         ).model_dump())
 
     appt_repo = AppointmentRepository(db)
-    conflict = await appt_repo.check_conflict(appt.doctor_id, naive_time)
+    conflict = await appt_repo.check_conflict(appt.doctor_id, naive_time, appt.duration_minutes)
     if conflict:
         patient_repo = PatientRepository(db)
         holder = await patient_repo.get_by_id(conflict.patient_id)
@@ -113,6 +123,7 @@ async def create_appointment(
                 patient_id=conflict.patient_id,
                 patient_name=holder_name,
                 time_slot=conflict.appointment_time.isoformat(),
+                duration_minutes=conflict.duration_minutes,
                 status=conflict.status.value,
             ),
         )
@@ -132,10 +143,11 @@ async def create_appointment(
             doctor_id=appt.doctor_id,
             patient_id=patient.id,
             appointment_time=naive_time,
+            duration_minutes=appt.duration_minutes,
         )
     except IntegrityError:
         await db.rollback()
-        conflict = await appt_repo.check_conflict(appt.doctor_id, naive_time)
+        conflict = await appt_repo.check_conflict(appt.doctor_id, naive_time, appt.duration_minutes)
         if conflict:
             patient_repo = PatientRepository(db)
             holder = await patient_repo.get_by_id(conflict.patient_id)
@@ -150,6 +162,7 @@ async def create_appointment(
                     patient_id=conflict.patient_id,
                     patient_name=holder_name,
                     time_slot=conflict.appointment_time.isoformat(),
+                    duration_minutes=conflict.duration_minutes,
                     status=conflict.status.value,
                 ),
             )
@@ -167,6 +180,7 @@ async def create_appointment(
             "doctor_id": appt.doctor_id,
             "patient_id": patient.id,
             "time_slot": new_appt.appointment_time.isoformat(),
+            "duration_minutes": new_appt.duration_minutes,
         },
     )
     booking = BookingResponse(
@@ -178,10 +192,59 @@ async def create_appointment(
             patient_id=new_appt.patient_id,
             patient_name=patient.name,
             time_slot=new_appt.appointment_time.isoformat(),
+            duration_minutes=new_appt.duration_minutes,
             status=new_appt.status.value,
         ),
     )
     return JSONResponse(status_code=201, content=booking.model_dump())
+
+
+@router.get("/available")
+async def get_available_slots(
+    doctor_id: int,
+    date: str,
+    duration_minutes: int = 30,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get available time slots for a doctor on a given date.
+
+    Returns 30-minute slots from 08:00 to 17:00 that are not booked.
+    """
+    try:
+        target_date = datetime.fromisoformat(date.replace("Z", "+00:00")).replace(tzinfo=None)
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=422, detail="date must be a valid ISO 8601 date string")
+
+    if duration_minutes < 5 or duration_minutes > 480:
+        raise HTTPException(status_code=422, detail="duration_minutes must be between 5 and 480")
+
+    repo = AppointmentRepository(db)
+    booked = await repo.get_booked_slots(doctor_id, target_date)
+
+    booked_ranges = []
+    for appt in booked:
+        start = appt.appointment_time
+        end = start + timedelta(minutes=appt.duration_minutes)
+        booked_ranges.append((start, end))
+
+    available = []
+    slot_start = target_date.replace(hour=8, minute=0, second=0, microsecond=0)
+    slot_end = target_date.replace(hour=17, minute=0, second=0, microsecond=0)
+    delta = timedelta(minutes=30)
+
+    current = slot_start
+    while current + timedelta(minutes=duration_minutes) <= slot_end:
+        proposed_end = current + timedelta(minutes=duration_minutes)
+        overlaps = any(
+            current < booked_end and proposed_end > booked_start
+            for booked_start, booked_end in booked_ranges
+        )
+        if not overlaps:
+            available.append(current.isoformat())
+        current += delta
+
+    return {"doctor_id": doctor_id, "date": target_date.date().isoformat(), "duration_minutes": duration_minutes, "available_slots": available}
 
 
 @router.get("/{appointment_id}", response_model=AppointmentDetail)
@@ -204,6 +267,7 @@ async def get_appointment(
         "patient_id": appt.patient_id,
         "patient_name": patient.name if patient else "Unknown",
         "time_slot": appt.appointment_time.isoformat(),
+        "duration_minutes": appt.duration_minutes,
         "status": appt.status.value,
     }
 

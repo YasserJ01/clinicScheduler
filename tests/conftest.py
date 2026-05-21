@@ -74,5 +74,7 @@ def seeded_doctor_id(user_token):
 
 @pytest.fixture
 def future_time_slot():
-    future = datetime.now(timezone.utc) + timedelta(days=7, hours=10)
+    import uuid
+    unique_days = int(uuid.uuid4().hex[:4], 16) % 300
+    future = datetime.now(timezone.utc) + timedelta(days=50 + unique_days, hours=10)
     return future.strftime("%Y-%m-%dT%H:%M:%SZ")

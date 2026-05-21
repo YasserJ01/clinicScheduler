@@ -67,6 +67,7 @@ class Appointment(Base):
     doctor_id = Column(Integer, ForeignKey("doctors.id"), nullable=False, index=True)
     patient_id = Column(Integer, ForeignKey("patients.id"), nullable=False, index=True)
     appointment_time = Column(DateTime, nullable=False, index=True)
+    duration_minutes = Column(Integer, nullable=False, default=30)
     status = Column(
         ENUM(AppointmentStatus, name="appointmentstatus", create_type=False, values_callable=lambda x: [e.value for e in x]),
         nullable=False,

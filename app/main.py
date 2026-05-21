@@ -1,4 +1,5 @@
 import logging
+import signal
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -6,9 +7,10 @@ from sqlalchemy import text
 
 from app.config import settings
 from app.core.middleware import MessagePackMiddleware
+from app.core.metrics_middleware import MetricsMiddleware
 from app.core.exceptions import register_exception_handlers
-from app.api.v1.routers import auth, doctors, patients, appointments, health, admin
-from app.db.session import init_db, async_session_factory
+from app.api.v1.routers import auth, doctors, patients, appointments, health, admin, metrics
+from app.db.session import init_db, async_session_factory, engine
 
 logging.basicConfig(level=logging.INFO)
 
@@ -30,7 +32,12 @@ async def seed_data():
 async def lifespan(app: FastAPI):
     await init_db()
     await seed_data()
+    logger = logging.getLogger("clinic.main")
+    logger.info("Application started")
     yield
+    logger.info("Shutting down gracefully...")
+    await engine.dispose()
+    logger.info("Database connections closed")
 
 
 def create_app() -> FastAPI:
@@ -50,6 +57,7 @@ def create_app() -> FastAPI:
     )
 
     app.add_middleware(MessagePackMiddleware)
+    app.add_middleware(MetricsMiddleware)
 
     register_exception_handlers(app)
 
@@ -59,6 +67,7 @@ def create_app() -> FastAPI:
     app.include_router(patients.router, prefix="/api/v1")
     app.include_router(appointments.router, prefix="/api/v1")
     app.include_router(admin.router, prefix="/api/v1")
+    app.include_router(metrics.router, prefix="/api/v1")
 
     return app
 
