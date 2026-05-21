@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from app.db.session import get_db
 from app.db.repository import AppointmentRepository, DoctorRepository, PatientRepository
 from app.api.v1.dependencies import get_current_user
+from app.core.audit import audit_log
 
 logger = logging.getLogger("clinic.appointments")
 
@@ -156,6 +157,18 @@ async def create_appointment(
         raise
 
     logger.info("Booking created: appt_id=%s on node %s", new_appt.id, NODE_ID)
+    await audit_log(
+        db,
+        actor=current_user["user_id"],
+        action="create_appointment",
+        entity_type="appointment",
+        entity_id=new_appt.id,
+        details={
+            "doctor_id": appt.doctor_id,
+            "patient_id": patient.id,
+            "time_slot": new_appt.appointment_time.isoformat(),
+        },
+    )
     booking = BookingResponse(
         success=True,
         node_id=NODE_ID,

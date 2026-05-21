@@ -23,8 +23,8 @@ docker compose down -v                # Tear down everything including DB volume
 | `app/main.py` | FastAPI entrypoint. `lifespan` runs `init_db()` then `seed_data()` on startup. |
 | `app/db/session.py` | Async engine + session factory. `init_db()` creates ENUM types + tables + partial unique index. |
 | `app/db/repository.py` | Data access layer. All DB queries go through repository classes. |
-| `app/models/__init__.py` | SQLAlchemy models: `User`, `Doctor`, `Patient`, `Appointment`. |
-| `app/api/v1/routers/` | Route handlers: `auth`, `doctors`, `patients`, `appointments`, `health`. |
+| `app/models/__init__.py` | SQLAlchemy models: `User`, `Doctor`, `Patient`, `Appointment`, `AuditLog`. |
+| `app/api/v1/routers/` | Route handlers: `auth`, `doctors`, `patients`, `appointments`, `health`, `admin`. |
 | `app/core/middleware.py` | MessagePack serialization + `X-Response-Time` header. |
 | `app/core/circuit_breaker.py` | Circuit breaker for DB/Redis partial failure isolation. |
 | `app/core/security.py` | JWT creation (with role claim), bcrypt password hashing. |
@@ -41,6 +41,8 @@ docker compose down -v                # Tear down everything including DB volume
 | `tests/integration/test_circuit_breaker.py` | 5 integration tests: health check with circuit breakers, breaker state validation. |
 | `tests/integration/test_middleware.py` | 6 integration tests: MessagePack content negotiation, X-Response-Time header. |
 | `tests/integration/test_chaos.py` | 2 integration tests: chaos backdoor (patient_id 999) returns 503. |
+| `tests/integration/test_security_phase5.py` | 10 integration tests: SQL injection, password policy, alg: none attack. |
+| `tests/integration/test_admin.py` | 7 integration tests: GDPR export (NDJSON), patient anonymisation, RBAC. |
 | `loadtest/scheduler.js` | k6 load test: read/write scenarios, 50-200 VUs, p95<500ms threshold. |
 | `docker-compose.baseline.yml` | Override file for 1-worker baseline load testing. |
 | `tests/conftest.py` | Pytest fixtures: HTTP client, admin/user tokens, auth headers, patient_id, future_time_slot. |
@@ -139,6 +141,40 @@ docker compose down -v                # Tear down everything including DB volume
 - `ix_appointments_patient_id`: B-tree index on `patient_id`
 - All critical queries use indexes; sub-millisecond execution even with 26k+ rows
 
+### CORS Configuration (Phase 5)
+- `FRONTEND_URL` env var controls allowed origins. Default: `*` (development).
+- Set to a specific origin for production: `FRONTEND_URL=https://app.clinic.example.com`
+- When `FRONTEND_URL != "*"`, CORS middleware allows only that single origin.
+
+### Password Policy (Phase 5)
+- Passwords > 72 bytes are rejected at registration with HTTP 422.
+- Byte count uses UTF-8 encoding (`len(password.encode("utf-8"))`), not character count.
+- Unicode characters may use multiple bytes (e.g., `é` = 2 bytes).
+
+### Audit Logging (Phase 5)
+- `app/core/audit.py` provides `audit_log()` helper that writes to both `audit_log` DB table and stdout.
+- Every `POST /appointments` creates an audit entry with actor, action, entity details.
+- Every `DELETE /admin/patients/{id}` creates an audit entry with original/anonymised names.
+- Audit entries are append-only; no update/delete operations on `audit_log` table.
+- Never logs sensitive data (passwords, tokens, connection strings).
+
+### GDPR Endpoints (Phase 5)
+- `GET /api/v1/admin/patients/{id}/export` — returns NDJSON stream of patient + appointments data.
+- `DELETE /api/v1/admin/patients/{id}` — anonymises patient (name → `ANONYMIZED-{id}`, email → `anonymized-{id}@redacted.local`, phone → NULL).
+- Both endpoints require `admin` role. Non-admin receives HTTP 403.
+- Anonymisation preserves FK integrity (appointments are NOT deleted).
+- Export content-type: `application/x-ndjson`.
+
+### TLS (Phase 5 — Documented Only)
+- TLS is NOT implemented in the current stack. Procedure documented in `Phase5_Security_Review_Report.md`.
+- For staging: generate self-signed cert with `openssl req -x509 ...` and mount in NGINX.
+- For production: use Let's Encrypt (certbot) with automated renewal.
+
+### SECRET_KEY Rotation (Phase 5)
+- Generate new key: `python -c "import secrets; print(secrets.token_hex(32))"`
+- Changing key invalidates all existing JWTs (users must re-authenticate).
+- For zero-downtime rotation: implement dual-key validation with fallback period.
+
 ## Dev Commands
 
 ```bash
@@ -170,6 +206,8 @@ python -m pytest tests/unit/test_circuit_breaker.py -v
 python -m pytest tests/integration/test_circuit_breaker.py -v
 python -m pytest tests/integration/test_middleware.py -v
 python -m pytest tests/integration/test_chaos.py -v
+python -m pytest tests/integration/test_security_phase5.py -v
+python -m pytest tests/integration/test_admin.py -v
 
 # Verify chaos trigger in worker logs
 docker logs clinic-scheduler-worker-1 | grep CHAOS
@@ -194,4 +232,16 @@ docker compose exec db psql -U clinic -d clinic_db -c "\di"
 
 # Run EXPLAIN ANALYSE on check_conflict query
 docker compose exec db psql -U clinic -d clinic_db -c "EXPLAIN ANALYSE SELECT * FROM appointments WHERE doctor_id = 1 AND appointment_time = '2027-01-01 10:00:00' AND status != 'cancelled';"
+
+# View audit log entries
+docker compose exec db psql -U clinic -d clinic_db -c "SELECT * FROM audit_log ORDER BY created_at DESC LIMIT 10;"
+
+# Test GDPR export (requires admin token)
+curl -s -H "Authorization: Bearer <admin_token>" http://localhost/api/v1/admin/patients/1/export
+
+# Test GDPR anonymisation (requires admin token)
+curl -s -X DELETE -H "Authorization: Bearer <admin_token>" http://localhost/api/v1/admin/patients/1
+
+# Set CORS to specific origin
+FRONTEND_URL=https://app.clinic.example.com docker compose up -d
 ```

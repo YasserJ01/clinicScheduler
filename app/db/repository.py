@@ -73,6 +73,16 @@ class PatientRepository:
             await self.session.flush()
         return patient
 
+    async def anonymise(self, patient_id: int) -> Patient | None:
+        patient = await self.get_by_id(patient_id)
+        if not patient:
+            return None
+        patient.name = f"ANONYMIZED-{patient.id}"
+        patient.email = f"anonymized-{patient.id}@redacted.local"
+        patient.phone = None
+        await self.session.flush()
+        return patient
+
 
 class AppointmentRepository:
     def __init__(self, session: AsyncSession):

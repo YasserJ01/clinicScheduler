@@ -23,6 +23,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
       - LOG_LEVEL=info
+      - FRONTEND_URL=${FRONTEND_URL:-*}
     depends_on:
       db:
         condition: service_healthy

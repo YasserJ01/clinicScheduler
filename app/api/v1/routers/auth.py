@@ -1,6 +1,6 @@
 from datetime import timedelta
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from app.db.repository import UserRepository
@@ -13,6 +13,13 @@ class RegisterRequest(BaseModel):
     username: str
     password: str
     role: str = "patient"
+
+    @field_validator("password")
+    @classmethod
+    def validate_password_length(cls, v: str) -> str:
+        if len(v.encode("utf-8")) > 72:
+            raise ValueError("Password must not exceed 72 bytes (bcrypt limit)")
+        return v
 
 
 class LoginRequest(BaseModel):

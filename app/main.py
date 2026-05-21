@@ -7,7 +7,7 @@ from sqlalchemy import text
 from app.config import settings
 from app.core.middleware import MessagePackMiddleware
 from app.core.exceptions import register_exception_handlers
-from app.api.v1.routers import auth, doctors, patients, appointments, health
+from app.api.v1.routers import auth, doctors, patients, appointments, health, admin
 from app.db.session import init_db, async_session_factory
 
 logging.basicConfig(level=logging.INFO)
@@ -40,9 +40,10 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    cors_origins = [settings.FRONTEND_URL] if settings.FRONTEND_URL != "*" else ["*"]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=cors_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -57,6 +58,7 @@ def create_app() -> FastAPI:
     app.include_router(doctors.router, prefix="/api/v1")
     app.include_router(patients.router, prefix="/api/v1")
     app.include_router(appointments.router, prefix="/api/v1")
+    app.include_router(admin.router, prefix="/api/v1")
 
     return app
 
