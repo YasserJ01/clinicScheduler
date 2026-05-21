@@ -7,8 +7,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 class TestConcurrentBooking:
     def test_concurrent_same_slot_one_succeeds(self, auth_headers, patient_id, seeded_doctor_id):
         """Two simultaneous requests for the same slot: one gets 201, one gets 409."""
-        unique_sec = str(int(uuid.uuid4().hex[:2], 16) % 60).zfill(2)
-        concurrent_slot = f"2027-04-01T10:30:{unique_sec}Z"
+        uid = uuid.uuid4().hex[:8]
+        hour = int(uid[:2], 16) % 24
+        minute = int(uid[2:4], 16) % 60
+        second = int(uid[4:6], 16) % 60
+        concurrent_slot = f"2027-04-01T{hour:02d}:{minute:02d}:{second:02d}Z"
         payload = {
             "doctor_id": seeded_doctor_id,
             "patient_id": patient_id,

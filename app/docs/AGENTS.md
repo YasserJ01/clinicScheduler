@@ -37,6 +37,10 @@ docker compose down -v                # Tear down everything including DB volume
 | `tests/integration/test_appointments.py` | 14 integration tests: booking success/conflict/validation, list, get by ID. |
 | `tests/integration/test_concurrent_booking.py` | 1 integration test: concurrent same-slot booking (201 + 409). |
 | `tests/integration/test_timezone.py` | 5 integration tests: Z suffix, UTC offset, naive datetime, invalid strings. |
+| `tests/unit/test_circuit_breaker.py` | 8 unit tests: CLOSED→OPEN→HALF_OPEN→CLOSED state machine transitions. |
+| `tests/integration/test_circuit_breaker.py` | 5 integration tests: health check with circuit breakers, breaker state validation. |
+| `tests/integration/test_middleware.py` | 6 integration tests: MessagePack content negotiation, X-Response-Time header. |
+| `tests/integration/test_chaos.py` | 2 integration tests: chaos backdoor (patient_id 999) returns 503. |
 | `tests/conftest.py` | Pytest fixtures: HTTP client, admin/user tokens, auth headers, patient_id, future_time_slot. |
 
 ## Gotchas
@@ -87,6 +91,34 @@ docker compose down -v                # Tear down everything including DB volume
 - `POST /api/v1/patients` creates or retrieves a patient by name/email (idempotent via `get_or_create_by_name`).
 - Required before booking appointments — the booking endpoint validates patient existence.
 
+### Circuit Breaker (Phase 3)
+- `app/core/circuit_breaker.py` implements a full state machine: CLOSED → OPEN → HALF_OPEN → CLOSED.
+- `db_breaker`: 5 failure threshold, 15-second recovery timeout.
+- `redis_breaker`: 3 failure threshold, 10-second recovery timeout.
+- Health check endpoint wraps DB/Redis probes with circuit breaker calls.
+- When OPEN, circuit breaker raises `CircuitBreakerError` immediately without calling the underlying function.
+- State is in-memory per worker; each of the 3 workers maintains its own breaker state.
+
+### MessagePack Middleware (Phase 3)
+- `app/core/middleware.py` adds `X-Response-Time: <N>ms` header to all responses.
+- Send `Accept: application/x-msgpack` to receive binary MessagePack-encoded responses.
+- POST/PUT/PATCH with `Content-Type: application/x-msgpack` decodes request body automatically.
+- Middleware is wired in `app/main.py` via `app.add_middleware(MessagePackMiddleware)`.
+
+### Chaos Testing Procedures (Phase 3)
+- **Trigger**: Send any booking request with `patient_id: 999` or `patient_id: "999"`.
+- **Expected**: HTTP 503 with `{"detail": "CHAOS: Simulated node failure"}`.
+- **Log output**: `CHAOS: Poison pill detected — patient_id=999 on node <container_id>` at ERROR level.
+- **Test command**: `python -m pytest tests/integration/test_chaos.py -v`
+- **Verify in logs**: `docker logs clinic-scheduler-worker-1 | grep CHAOS`
+- **NGINX retry**: With `proxy_next_upstream` configured, NGINX may retry the request on another worker if the first returns 503.
+
+### Structured Logging
+- All modules use named loggers: `clinic.appointments`, `clinic.exceptions`, `clinic.health`.
+- CHAOS errors include `patient_id` and `node_id` for traceability.
+- Booking success logs include `appt_id` and `node_id`.
+- Health check failures log the specific probe (DB or Redis) and error message.
+
 ## Dev Commands
 
 ```bash
@@ -114,4 +146,11 @@ python -m pytest tests/integration/test_auth.py -v
 python -m pytest tests/integration/test_appointments.py -v
 python -m pytest tests/integration/test_concurrent_booking.py -v
 python -m pytest tests/integration/test_timezone.py -v
+python -m pytest tests/unit/test_circuit_breaker.py -v
+python -m pytest tests/integration/test_circuit_breaker.py -v
+python -m pytest tests/integration/test_middleware.py -v
+python -m pytest tests/integration/test_chaos.py -v
+
+# Verify chaos trigger in worker logs
+docker logs clinic-scheduler-worker-1 | grep CHAOS
 ```

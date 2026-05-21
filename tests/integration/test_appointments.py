@@ -91,8 +91,11 @@ class TestBookAppointment:
 
     def test_node_id_reflects_hostname(self, http_client, auth_headers, patient_id, seeded_doctor_id):
         import uuid
-        unique_sec = str(int(uuid.uuid4().hex[:2], 16) % 60).zfill(2)
-        unique_slot = f"2027-02-20T09:30:{unique_sec}Z"
+        uid = uuid.uuid4().hex[:8]
+        hour = int(uid[:2], 16) % 24
+        minute = int(uid[2:4], 16) % 60
+        second = int(uid[4:6], 16) % 60
+        unique_slot = f"2027-02-20T{hour:02d}:{minute:02d}:{second:02d}Z"
         resp = http_client.post(
             "/api/v1/appointments",
             headers=auth_headers,
@@ -126,8 +129,11 @@ class TestListAppointments:
 class TestGetAppointment:
     def test_get_appointment_by_id(self, http_client, auth_headers, patient_id, seeded_doctor_id):
         import uuid
-        unique_sec = str(int(uuid.uuid4().hex[:2], 16) % 60).zfill(2)
-        unique_slot = f"2027-03-10T11:30:{unique_sec}Z"
+        uid = uuid.uuid4().hex[:8]
+        hour = int(uid[:2], 16) % 24
+        minute = int(uid[2:4], 16) % 60
+        second = int(uid[4:6], 16) % 60
+        unique_slot = f"2027-03-10T{hour:02d}:{minute:02d}:{second:02d}Z"
         create_resp = http_client.post(
             "/api/v1/appointments",
             headers=auth_headers,
