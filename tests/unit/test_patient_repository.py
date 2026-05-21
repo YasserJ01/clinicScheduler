@@ -25,8 +25,8 @@ async def test_get_or_create_by_email_looks_up_by_email():
     compiled = stmt.compile(compile_kwargs={"literal_binds": True})
     sql = str(compiled).lower()
 
-    assert "email" in sql
-    assert "name" not in sql
+    assert "patients.email =" in sql
+    assert "patients.name =" not in sql
 
 
 @pytest.mark.asyncio
