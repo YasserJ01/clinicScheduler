@@ -11,3 +11,5 @@ build/
 .idea/
 .vscode/
 loadtest/baseline_results.json
+nginx/ssl/
+observability/

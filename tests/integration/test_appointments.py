@@ -164,7 +164,9 @@ class TestListAppointments:
     def test_list_appointments(self, http_client, auth_headers):
         resp = http_client.get("/api/v1/appointments", headers=auth_headers)
         assert resp.status_code == 200
-        assert isinstance(resp.json(), list)
+        data = resp.json()
+        assert "items" in data
+        assert isinstance(data["items"], list)
 
     def test_list_appointments_unauthenticated(self, http_client):
         resp = http_client.get("/api/v1/appointments")
@@ -175,10 +177,19 @@ class TestListAppointments:
     ):
         resp = http_client.get("/api/v1/appointments", headers=auth_headers)
         assert resp.status_code == 200
-        appointments = resp.json()
+        appointments = resp.json()["items"]
         if len(appointments) >= 2:
             times = [a["time_slot"] for a in appointments]
             assert times == sorted(times)
+
+    def test_list_appointments_pagination_envelope(self, http_client, auth_headers):
+        resp = http_client.get("/api/v1/appointments", headers=auth_headers)
+        data = resp.json()
+        assert "total" in data
+        assert "page" in data
+        assert "page_size" in data
+        assert "pages" in data
+        assert data["page"] == 1
 
 
 class TestGetAppointment:

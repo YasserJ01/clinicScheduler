@@ -123,7 +123,7 @@ class TestGDPRAnonymisation:
             headers=self.admin_headers,
         )
         assert resp.status_code == 200
-        patients = resp.json()
+        patients = resp.json()["items"]
         for p in patients:
             if p["id"] == patient["id"]:
                 assert "ANONYMIZED" in p["name"]

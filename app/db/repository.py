@@ -1,5 +1,5 @@
 from typing import Sequence
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Doctor, Patient, Appointment, User, UserRole, AppointmentStatus
 from app.core.security import get_password_hash
@@ -37,6 +37,25 @@ class DoctorRepository:
         )
         return result.scalars().all()
 
+    async def list_paginated(
+        self, page: int = 1, page_size: int = 20, specialty: str | None = None
+    ) -> tuple[Sequence[Doctor], int]:
+        page_size = min(page_size, 100)
+        where_clauses = [Doctor.is_active.is_(True)]
+        if specialty:
+            where_clauses.append(Doctor.specialty.ilike(f"%{specialty}%"))
+        count_stmt = select(func.count()).select_from(Doctor).where(*where_clauses)
+        count_result = await self.session.execute(count_stmt)
+        total = count_result.scalar() or 0
+        stmt = (
+            select(Doctor)
+            .where(*where_clauses)
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+        result = await self.session.execute(stmt)
+        return result.scalars().all(), total
+
     async def get_by_id(self, doctor_id: int) -> Doctor | None:
         result = await self.session.execute(
             select(Doctor).where(Doctor.id == doctor_id)
@@ -49,6 +68,16 @@ class DoctorRepository:
         await self.session.flush()
         return doctor
 
+    async def update(self, doctor_id: int, **fields) -> Doctor | None:
+        doctor = await self.get_by_id(doctor_id)
+        if not doctor:
+            return None
+        for field, value in fields.items():
+            if value is not None and hasattr(doctor, field):
+                setattr(doctor, field, value)
+        await self.session.flush()
+        return doctor
+
 
 class PatientRepository:
     def __init__(self, session: AsyncSession):
@@ -57,6 +86,25 @@ class PatientRepository:
     async def list_all(self) -> Sequence[Patient]:
         result = await self.session.execute(select(Patient))
         return result.scalars().all()
+
+    async def list_paginated(
+        self, page: int = 1, page_size: int = 20, search: str | None = None
+    ) -> tuple[Sequence[Patient], int]:
+        page_size = min(page_size, 100)
+        where_clauses = []
+        if search:
+            where_clauses.append(Patient.name.ilike(f"%{search}%"))
+        count_stmt = select(func.count()).select_from(Patient)
+        if where_clauses:
+            count_stmt = count_stmt.where(*where_clauses)
+        count_result = await self.session.execute(count_stmt)
+        total = count_result.scalar() or 0
+        stmt = select(Patient)
+        if where_clauses:
+            stmt = stmt.where(*where_clauses)
+        stmt = stmt.offset((page - 1) * page_size).limit(page_size)
+        result = await self.session.execute(stmt)
+        return result.scalars().all(), total
 
     async def get_by_id(self, patient_id: int) -> Patient | None:
         result = await self.session.execute(
@@ -85,16 +133,67 @@ class PatientRepository:
         await self.session.flush()
         return patient
 
+    async def update(self, patient_id: int, **fields) -> Patient | None:
+        patient = await self.get_by_id(patient_id)
+        if not patient:
+            return None
+        for field, value in fields.items():
+            if value is not None and hasattr(patient, field):
+                setattr(patient, field, value)
+        await self.session.flush()
+        return patient
+
 
 class AppointmentRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
+
+    VALID_TRANSITIONS = {
+        "scheduled": ["confirmed", "cancelled"],
+        "confirmed": ["completed", "cancelled"],
+        "completed": [],
+        "cancelled": [],
+    }
 
     async def list_all(self) -> Sequence[Appointment]:
         result = await self.session.execute(
             select(Appointment).order_by(Appointment.appointment_time)
         )
         return result.scalars().all()
+
+    async def list_paginated(
+        self,
+        page: int = 1,
+        page_size: int = 20,
+        doctor_id: int | None = None,
+        patient_id: int | None = None,
+        status: str | None = None,
+        from_date: datetime | None = None,
+        to_date: datetime | None = None,
+    ) -> tuple[Sequence[Appointment], int]:
+        page_size = min(page_size, 100)
+        where_clauses = []
+        if doctor_id is not None:
+            where_clauses.append(Appointment.doctor_id == doctor_id)
+        if patient_id is not None:
+            where_clauses.append(Appointment.patient_id == patient_id)
+        if status:
+            where_clauses.append(Appointment.status == AppointmentStatus(status))
+        if from_date:
+            where_clauses.append(Appointment.appointment_time >= from_date)
+        if to_date:
+            where_clauses.append(Appointment.appointment_time <= to_date)
+        count_stmt = select(func.count()).select_from(Appointment)
+        if where_clauses:
+            count_stmt = count_stmt.where(*where_clauses)
+        count_result = await self.session.execute(count_stmt)
+        total = count_result.scalar() or 0
+        stmt = select(Appointment).order_by(Appointment.appointment_time)
+        if where_clauses:
+            stmt = stmt.where(*where_clauses)
+        stmt = stmt.offset((page - 1) * page_size).limit(page_size)
+        result = await self.session.execute(stmt)
+        return result.scalars().all(), total
 
     async def get_by_id(self, appointment_id: int) -> Appointment | None:
         result = await self.session.execute(

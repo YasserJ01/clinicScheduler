@@ -1,3 +1,4 @@
+import redis.asyncio as aioredis
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt
@@ -23,7 +24,19 @@ async def get_current_user(
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token"
             )
-        return {"user_id": user_id, "role": payload.get("role", "patient")}
+        redis = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+        jti = user_id + ":" + credentials.credentials[:8]
+        denied = await redis.get(f"token_denylist:{jti}")
+        await redis.aclose()
+        if denied:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Token revoked"
+            )
+        return {
+            "user_id": user_id,
+            "role": payload.get("role", "patient"),
+            "_raw_token": credentials.credentials,
+        }
     except JWTError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Token decode error"

@@ -3,8 +3,9 @@ class TestListDoctors:
         resp = http_client.get("/api/v1/doctors", headers=auth_headers)
         assert resp.status_code == 200
         data = resp.json()
-        assert isinstance(data, list)
-        assert len(data) >= 2
+        assert "items" in data
+        assert isinstance(data["items"], list)
+        assert len(data["items"]) >= 2
 
     def test_list_doctors_unauthenticated(self, http_client):
         resp = http_client.get("/api/v1/doctors")
@@ -13,10 +14,20 @@ class TestListDoctors:
     def test_list_doctors_returns_expected_fields(self, http_client, auth_headers):
         resp = http_client.get("/api/v1/doctors", headers=auth_headers)
         data = resp.json()
-        for doctor in data:
+        for doctor in data["items"]:
             assert "id" in doctor
             assert "name" in doctor
             assert "specialty" in doctor
+
+    def test_list_doctors_pagination_returns_envelope(self, http_client, auth_headers):
+        resp = http_client.get("/api/v1/doctors", headers=auth_headers)
+        data = resp.json()
+        assert "total" in data
+        assert "page" in data
+        assert "page_size" in data
+        assert "pages" in data
+        assert data["page"] == 1
+        assert data["page_size"] == 20
 
 
 class TestCreateDoctor:

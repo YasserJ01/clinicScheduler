@@ -27,7 +27,7 @@ docker compose down -v                # Tear down everything including DB volume
 | `app/api/v1/routers/` | Route handlers: `auth`, `doctors`, `patients`, `appointments`, `health`, `admin`, `metrics`. |
 | `app/core/middleware.py` | MessagePack serialization + `X-Response-Time` header. |
 | `app/core/circuit_breaker.py` | Circuit breaker for DB/Redis partial failure isolation. |
-| `app/core/security.py` | JWT creation (with role claim), bcrypt password hashing. |
+| `app/core/security.py` | JWT creation, refresh tokens, bcrypt password hashing. |
 | `app/core/metrics.py` | Async Redis-backed Prometheus metrics collector. |
 | `app/core/metrics_middleware.py` | HTTP request tracking middleware (async). |
 | `app/core/request_id_middleware.py` | X-Request-ID correlation header middleware. |
@@ -38,7 +38,7 @@ docker compose down -v                # Tear down everything including DB volume
 | `tests/integration/test_auth.py` | 10 integration tests: register, login, JWT validation. |
 | `tests/integration/test_doctors.py` | 6 integration tests: list doctors, create doctor (admin). |
 | `tests/integration/test_patients.py` | 6 integration tests: list patients, profile, real patient ID lookup. |
-| `tests/integration/test_appointments.py` | 14 integration tests: booking success/conflict/validation, list, get by ID. |
+| `tests/integration/test_appointments.py` | 14 integration tests: booking success/conflict/validation, list, get by ID, status lifecycle. |
 | `tests/integration/test_concurrent_booking.py` | 1 integration test: concurrent same-slot booking (201 + 409). |
 | `tests/integration/test_timezone.py` | 5 integration tests: Z suffix, UTC offset, naive datetime, invalid strings. |
 | `tests/unit/test_circuit_breaker.py` | 8 unit tests: CLOSED→OPEN→HALF_OPEN→CLOSED state machine transitions. |
@@ -233,6 +233,15 @@ docker compose down -v                # Tear down everything including DB volume
 - `ix_audit_log_created_at` on `created_at` — query by date range
 - Migration `004` creates these indexes.
 
+### Pagination (Phase 8)
+- All list endpoints (`GET /doctors`, `GET /patients`, `GET /appointments`) return a paginated envelope.
+- Response: `{"items": [...], "total": N, "page": 1, "page_size": 20, "pages": N}`
+- Query params: `page` (default 1), `page_size` (default 20, max 100)
+- Appointments: `doctor_id`, `patient_id`, `status`, `from_date`, `to_date`
+- Patients: `search` (name ILIKE)
+- Doctors: `specialty` (ILIKE)
+- Existing tests updated to unwrap `data["items"]` instead of `data` directly.
+
 ### X-Request-ID Header (Phase 7)
 - All responses include `X-Request-ID` header (UUIDv4 or forwarded from client).
 - Useful for correlating logs across NGINX, workers, and database.
@@ -246,6 +255,36 @@ docker compose down -v                # Tear down everything including DB volume
 ### Conflict Query Optimization (Phase 7)
 - `check_conflict()` now includes a lower-bound filter: `appointment_time >= naive_time - 480 minutes`.
 - Prevents full-table scans on large appointment tables.
+
+### Appointment Status Lifecycle (Phase 8)
+- `PATCH /api/v1/appointments/{id}/status` with body `{"status": "confirmed"}`.
+- Allowed transitions: `scheduled → confirmed/cancelled`, `confirmed → completed/cancelled`.
+- Patients can only cancel their own appointments. Doctors can confirm/complete/cancel. Admins can do anything.
+- Invalid transitions return HTTP 409. Unauthorized access returns HTTP 403.
+- Every status change creates an audit log entry.
+
+### Doctor Deactivation (Phase 8)
+- `PATCH /api/v1/doctors/{id}` with `{"is_active": false}` deactivates a doctor.
+- Deactivated doctors are excluded from `GET /doctors` and cannot be booked.
+- Booking a deactivated doctor returns HTTP 400 with `"Doctor not found or inactive"`.
+
+### JWT Refresh Tokens (Phase 8)
+- Access tokens now expire in 15 minutes (was 30).
+- Login/register returns `{"access_token": "...", "refresh_token": "..."}`.
+- `POST /api/v1/auth/refresh` exchanges a refresh token for a new access + refresh token pair.
+- Refresh tokens rotate on each use (old one becomes invalid).
+- `POST /api/v1/auth/logout` adds the access token to a Redis deny-list.
+- Revoked tokens are rejected by `get_current_user` with HTTP 401.
+
+### TLS Configuration (Phase 8)
+- `nginx/nginx.conf.tls` provides HTTPS with HSTS and HTTP→HTTPS redirect.
+- Dev certificates: `./scripts/generate_dev_certs.sh`
+- Production: use Let's Encrypt / Certbot.
+
+### Observability Stack (Phase 8)
+- `docker-compose.observability.yml` adds Loki (3100), Promtail, Grafana (3000).
+- Grafana default password: `admin` (set `GRAFANA_PASSWORD` to change).
+- Promtail scrapes Docker container logs and forwards to Loki.
 
 ## Dev Commands
 
@@ -352,4 +391,34 @@ python -c "import httpx; r = httpx.get('http://localhost/api/v1/metrics'); print
 
 # Verify CHAOS_ENABLED is off in production (default)
 python -c "from app.config import settings; print('CHAOS_ENABLED:', settings.CHAOS_ENABLED)"
+
+# Update appointment status (requires admin/doctor/patient token)
+curl -s -X PATCH -H "Authorization: Bearer <token>" -H "Content-Type: application/json" -d '{"status":"confirmed"}' http://localhost/api/v1/appointments/1/status
+
+# Get doctor profile
+curl -s -H "Authorization: Bearer <token>" http://localhost/api/v1/doctors/1
+
+# Deactivate a doctor (admin only)
+curl -s -X PATCH -H "Authorization: Bearer <admin_token>" -H "Content-Type: application/json" -d '{"is_active":false}' http://localhost/api/v1/doctors/1
+
+# Get patient by ID (admin/doctor only)
+curl -s -H "Authorization: Bearer <token>" http://localhost/api/v1/patients/1
+
+# Update patient (admin only)
+curl -s -X PATCH -H "Authorization: Bearer <admin_token>" -H "Content-Type: application/json" -d '{"name":"Jane Doe"}' http://localhost/api/v1/patients/1
+
+# Refresh access token
+curl -s -X POST -H "Content-Type: application/json" -d '{"refresh_token":"<refresh_token>"}' http://localhost/api/v1/auth/refresh
+
+# Logout (revokes current access token)
+curl -s -X POST -H "Authorization: Bearer <token>" http://localhost/api/v1/auth/logout
+
+# Generate dev TLS certificates
+./scripts/generate_dev_certs.sh
+
+# Start observability stack (Loki + Grafana)
+docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d
+
+# Apply all Alembic migrations (including 005_refresh_tokens)
+alembic upgrade head
 ```

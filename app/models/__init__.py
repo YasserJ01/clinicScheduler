@@ -31,6 +31,8 @@ class User(Base):
         nullable=False,
         default=UserRole.PATIENT,
     )
+    refresh_token_hash = Column(String(255), nullable=True)
+    refresh_token_expires_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
 

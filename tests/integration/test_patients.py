@@ -6,11 +6,20 @@ class TestListPatients:
         resp = http_client.get("/api/v1/patients", headers=auth_headers)
         assert resp.status_code == 200
         data = resp.json()
-        assert isinstance(data, list)
+        assert "items" in data
+        assert isinstance(data["items"], list)
 
     def test_list_patients_unauthenticated(self, http_client):
         resp = http_client.get("/api/v1/patients")
         assert resp.status_code in (401, 403)
+
+    def test_list_patients_pagination_envelope(self, http_client, auth_headers):
+        resp = http_client.get("/api/v1/patients", headers=auth_headers)
+        data = resp.json()
+        assert "total" in data
+        assert "page" in data
+        assert "page_size" in data
+        assert "pages" in data
 
 
 class TestPatientProfile:

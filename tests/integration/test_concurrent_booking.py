@@ -48,7 +48,7 @@ class TestConcurrentBooking:
             headers=auth_headers,
         )
         assert list_resp.status_code == 200
-        appointments = list_resp.json()
+        appointments = list_resp.json()["items"]
         matching = [
             a
             for a in appointments

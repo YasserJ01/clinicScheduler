@@ -1,0 +1,29 @@
+services:
+  loki:
+    image: grafana/loki:2.9.0
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    networks:
+      - clinic-net
+    restart: unless-stopped
+
+  promtail:
+    image: grafana/promtail:2.9.0
+    volumes:
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - ./observability/promtail-config.yml:/etc/promtail/config.yml:ro
+    command: -config.file=/etc/promtail/config.yml
+    networks:
+      - clinic-net
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:10.0.0
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+    networks:
+      - clinic-net
+    restart: unless-stopped

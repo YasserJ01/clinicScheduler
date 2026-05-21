@@ -22,8 +22,10 @@ class TestMessagePackMiddleware:
         assert resp.status_code == 200
         assert resp.headers["content-type"] == "application/x-msgpack"
         data = msgpack.unpackb(resp.content, raw=False)
-        assert isinstance(data, list)
-        assert len(data) >= 2
+        assert isinstance(data, dict)
+        assert "items" in data
+        assert isinstance(data["items"], list)
+        assert len(data["items"]) >= 2
 
     def test_msgpack_response_matches_json_response(self, http_client, auth_headers):
         json_resp = http_client.get("/api/v1/doctors", headers=auth_headers)

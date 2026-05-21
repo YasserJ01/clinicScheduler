@@ -1,6 +1,7 @@
 import socket
 import logging
-from fastapi import APIRouter, Depends, HTTPException
+import math
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 from datetime import datetime, timedelta
@@ -12,6 +13,7 @@ from app.db.repository import AppointmentRepository, DoctorRepository, PatientRe
 from app.api.v1.dependencies import get_current_user
 from app.core.audit import audit_log
 from app.config import settings
+from app.models import AppointmentStatus
 
 logger = logging.getLogger("clinic.appointments")
 
@@ -62,13 +64,30 @@ class BookingResponse(BaseModel):
     appointment: AppointmentDetail | None = None
 
 
-@router.get("", response_model=list[AppointmentDetail])
+@router.get("")
 async def list_appointments(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    doctor_id: int | None = Query(None),
+    patient_id: int | None = Query(None),
+    status: str | None = Query(None),
+    from_date: str | None = Query(None),
+    to_date: str | None = Query(None),
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     repo = AppointmentRepository(db)
-    appointments = await repo.list_all()
+    from_dt = _parse_time_slot(from_date) if from_date else None
+    to_dt = _parse_time_slot(to_date) if to_date else None
+    appointments, total = await repo.list_paginated(
+        page=page,
+        page_size=page_size,
+        doctor_id=doctor_id,
+        patient_id=patient_id,
+        status=status,
+        from_date=from_dt,
+        to_date=to_dt,
+    )
     result = []
     for appt in appointments:
         patient_repo = PatientRepository(db)
@@ -84,7 +103,14 @@ async def list_appointments(
                 "status": appt.status.value,
             }
         )
-    return result
+    pages = math.ceil(total / page_size) if total > 0 else 0
+    return {
+        "items": result,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "pages": pages,
+    }
 
 
 @router.post("")
@@ -107,13 +133,13 @@ async def create_appointment(
 
     doctor_repo = DoctorRepository(db)
     doctor = await doctor_repo.get_by_id(appt.doctor_id)
-    if not doctor:
+    if not doctor or not doctor.is_active:
         return JSONResponse(
             status_code=400,
             content=BookingResponse(
                 success=False,
                 node_id=NODE_ID,
-                error="Doctor not found",
+                error="Doctor not found or inactive",
             ).model_dump(),
         )
 
@@ -272,6 +298,88 @@ async def get_available_slots(
         "date": target_date.date().isoformat(),
         "duration_minutes": duration_minutes,
         "available_slots": available,
+    }
+
+
+class StatusUpdate(BaseModel):
+    status: str
+
+
+@router.patch("/{appointment_id}/status")
+async def update_appointment_status(
+    appointment_id: int,
+    req: StatusUpdate,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    role = current_user.get("role", "patient")
+    username = current_user["user_id"]
+
+    try:
+        new_status = AppointmentStatus(req.status)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"Invalid status: {req.status}")
+
+    appt_repo = AppointmentRepository(db)
+    appt = await appt_repo.get_by_id(appointment_id)
+    if not appt:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+
+    if role == "patient":
+        if new_status != AppointmentStatus.CANCELLED:
+            raise HTTPException(
+                status_code=403, detail="Patients can only cancel appointments"
+            )
+        patient_repo = PatientRepository(db)
+        patient = await patient_repo.get_by_id(appt.patient_id)
+        if not patient or patient.email != f"{username}@clinic.com":
+            raise HTTPException(
+                status_code=403, detail="Cannot cancel another patient's appointment"
+            )
+    elif role == "doctor":
+        allowed = [
+            AppointmentStatus.CONFIRMED,
+            AppointmentStatus.COMPLETED,
+            AppointmentStatus.CANCELLED,
+        ]
+        if new_status not in allowed:
+            raise HTTPException(
+                status_code=403, detail="Doctors cannot set that status"
+            )
+    elif role != "admin":
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+
+    try:
+        updated = await appt_repo.update_status(appointment_id, new_status)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+    if not updated:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+
+    await audit_log(
+        db,
+        actor=username,
+        action="update_appointment_status",
+        entity_type="appointment",
+        entity_id=appointment_id,
+        details={
+            "old_status": appt.status.value,
+            "new_status": new_status.value,
+        },
+    )
+
+    patient_repo = PatientRepository(db)
+    patient = await patient_repo.get_by_id(appt.patient_id)
+
+    return {
+        "id": updated.id,
+        "doctor_id": updated.doctor_id,
+        "patient_id": updated.patient_id,
+        "patient_name": patient.name if patient else "Unknown",
+        "time_slot": updated.appointment_time.isoformat(),
+        "duration_minutes": updated.duration_minutes,
+        "status": updated.status.value,
     }
 
 
