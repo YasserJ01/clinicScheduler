@@ -10,3 +10,4 @@ build/
 .pgdata/
 .idea/
 .vscode/
+loadtest/baseline_results.json

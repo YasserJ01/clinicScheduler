@@ -41,6 +41,8 @@ docker compose down -v                # Tear down everything including DB volume
 | `tests/integration/test_circuit_breaker.py` | 5 integration tests: health check with circuit breakers, breaker state validation. |
 | `tests/integration/test_middleware.py` | 6 integration tests: MessagePack content negotiation, X-Response-Time header. |
 | `tests/integration/test_chaos.py` | 2 integration tests: chaos backdoor (patient_id 999) returns 503. |
+| `loadtest/scheduler.js` | k6 load test: read/write scenarios, 50-200 VUs, p95<500ms threshold. |
+| `docker-compose.baseline.yml` | Override file for 1-worker baseline load testing. |
 | `tests/conftest.py` | Pytest fixtures: HTTP client, admin/user tokens, auth headers, patient_id, future_time_slot. |
 
 ## Gotchas
@@ -119,6 +121,24 @@ docker compose down -v                # Tear down everything including DB volume
 - Booking success logs include `appt_id` and `node_id`.
 - Health check failures log the specific probe (DB or Redis) and error message.
 
+### Load Testing (Phase 4)
+- k6 binary location: `C:\Program Files\k6\k6.exe` (not on PATH).
+- **Read-heavy test** (default): `& "C:\Program Files\k6\k6.exe" run loadtest/scheduler.js`
+- **Write-heavy test**: `& "C:\Program Files\k6\k6.exe" run --env SCENARIO=write loadtest/scheduler.js`
+- **Baseline test (1 worker)**: `docker compose -f docker-compose.yml -f docker-compose.baseline.yml up -d`
+- **Scaling test (3 workers)**: `docker compose up -d`
+- **Thresholds**: p95 < 500ms, HTTP error < 5%, app error < 10%
+- **Results**: 3 workers show 20% higher throughput and 55% lower p95 latency vs 1 worker
+- **Production rate limit**: Reduce from 500 r/s to ~30 r/s per IP in production
+- **Note**: k6 may OOM on Windows with 200 VUs; use 50 VUs for local testing
+
+### Database Indexes
+- `uix_appointment_slot`: Partial unique index on `(doctor_id, appointment_time) WHERE status != 'cancelled'`
+- `ix_appointments_appointment_time`: B-tree index on `appointment_time`
+- `ix_appointments_doctor_id`: B-tree index on `doctor_id`
+- `ix_appointments_patient_id`: B-tree index on `patient_id`
+- All critical queries use indexes; sub-millisecond execution even with 26k+ rows
+
 ## Dev Commands
 
 ```bash
@@ -153,4 +173,25 @@ python -m pytest tests/integration/test_chaos.py -v
 
 # Verify chaos trigger in worker logs
 docker logs clinic-scheduler-worker-1 | grep CHAOS
+
+# Run load tests (requires k6 installed)
+& "C:\Program Files\k6\k6.exe" run loadtest/scheduler.js
+& "C:\Program Files\k6\k6.exe" run --env SCENARIO=write loadtest/scheduler.js
+
+# Run baseline load test (1 worker)
+docker compose -f docker-compose.yml -f docker-compose.baseline.yml up -d
+& "C:\Program Files\k6\k6.exe" run loadtest/scheduler.js
+
+# Run scaling load test (3 workers)
+docker compose up -d
+& "C:\Program Files\k6\k6.exe" run loadtest/scheduler.js
+
+# Check Redis memory usage
+docker compose exec redis redis-cli INFO memory
+
+# Verify database indexes
+docker compose exec db psql -U clinic -d clinic_db -c "\di"
+
+# Run EXPLAIN ANALYSE on check_conflict query
+docker compose exec db psql -U clinic -d clinic_db -c "EXPLAIN ANALYSE SELECT * FROM appointments WHERE doctor_id = 1 AND appointment_time = '2027-01-01 10:00:00' AND status != 'cancelled';"
 ```

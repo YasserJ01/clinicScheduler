@@ -1,50 +1,155 @@
 import http from 'k6/http';
 import { check, sleep } from 'k6';
-import { Rate } from 'k6/metrics';
+import { Rate, Trend } from 'k6/metrics';
 
 const errorRate = new Rate('errors');
+const bookingSuccessRate = new Rate('booking_success');
+const bookingConflictRate = new Rate('booking_conflict');
+const bookingLatency = new Trend('booking_latency', true);
+const doctorsLatency = new Trend('doctors_latency', true);
 
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:80';
 
 export const options = {
-  stages: [
-    { duration: '30s', target: 50 },
-    { duration: '1m', target: 200 },
-    { duration: '30s', target: 0 },
-  ],
+  scenarios: {
+    read_heavy: {
+      executor: 'ramping-vus',
+      startVUs: 0,
+      stages: [
+        { duration: '30s', target: 50 },
+        { duration: '1m', target: 200 },
+        { duration: '30s', target: 0 },
+      ],
+      gracefulRampDown: '10s',
+      env: { SCENARIO: 'read' },
+    },
+  },
   thresholds: {
     http_req_duration: ['p(95)<500'],
     http_req_failed: ['rate<0.05'],
     errors: ['rate<0.1'],
+    booking_success: ['rate>0.8'],
+    booking_latency: ['p(95)<500'],
+    doctors_latency: ['p(95)<300'],
   },
 };
 
-let token = '';
-
-export function setup() {
+function registerOrLogin() {
+  const username = `loadtest_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const regRes = http.post(`${BASE_URL}/api/v1/auth/register`, JSON.stringify({
-    username: 'loadtest_user',
+    username: username,
     password: 'testpass123',
     role: 'patient',
   }), {
     headers: { 'Content-Type': 'application/json' },
   });
-  check(regRes, { 'registered': (r) => r.status === 200 || r.status === 400 });
-  const body = regRes.json();
-  return body.access_token || '';
+
+  let token = '';
+  if (regRes.status === 200) {
+    const body = regRes.json();
+    token = body.access_token || '';
+  } else if (regRes.status === 400) {
+    const loginRes = http.post(`${BASE_URL}/api/v1/auth/login`, JSON.stringify({
+      username: username,
+      password: 'testpass123',
+    }), {
+      headers: { 'Content-Type': 'application/json' },
+    });
+    if (loginRes.status === 200) {
+      token = loginRes.json().access_token || '';
+    }
+  }
+
+  return token;
 }
 
-export default function (setupToken) {
-  token = setupToken;
+function createPatient(token) {
+  const patientName = `LoadTest Patient ${Date.now()}`;
+  const res = http.post(`${BASE_URL}/api/v1/patients`, JSON.stringify({
+    name: patientName,
+    email: `loadtest_${Date.now()}@example.com`,
+  }), {
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
+    },
+  });
+
+  if (res.status === 200 || res.status === 201) {
+    const body = res.json();
+    return body.id || body.patient?.id || null;
+  }
+  return null;
+}
+
+export function setup() {
+  const token = registerOrLogin();
+  const patientId = createPatient(token);
+
+  return { token, patientId };
+}
+
+export default function (data) {
+  const token = data.token;
+  const patientId = data.patientId;
+
+  if (!token) {
+    errorRate.add(true);
+    return;
+  }
 
   const headers = {
     'Authorization': `Bearer ${token}`,
     'Accept': 'application/json',
   };
 
-  const res = http.get(`${BASE_URL}/api/v1/doctors`, { headers });
-  check(res, { 'doctors loaded': (r) => r.status === 200 });
-  errorRate.add(res.status !== 200);
+  const scenario = __ENV.SCENARIO || 'read';
 
-  sleep(0.5);
+  if (scenario === 'read') {
+    const res = http.get(`${BASE_URL}/api/v1/doctors`, { headers });
+    check(res, { 'doctors loaded': (r) => r.status === 200 });
+    doctorsLatency.add(res.timings.duration);
+    errorRate.add(res.status !== 200);
+    sleep(0.3);
+  } else {
+    const doctorRes = http.get(`${BASE_URL}/api/v1/doctors`, { headers });
+    const doctors = doctorRes.status === 200 ? doctorRes.json() : [];
+    if (doctors.length === 0) {
+      errorRate.add(true);
+      sleep(0.5);
+      return;
+    }
+
+    const doctor = doctors[Math.floor(Math.random() * doctors.length)];
+    const hour = Math.floor(Math.random() * 12) + 8;
+    const minute = Math.floor(Math.random() * 60);
+    const day = Math.floor(Math.random() * 28) + 1;
+    const timeSlot = `2027-08-${String(day).padStart(2, '0')}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00Z`;
+
+    const bookingRes = http.post(`${BASE_URL}/api/v1/appointments`, JSON.stringify({
+      doctor_id: doctor.id,
+      patient_id: patientId,
+      time_slot: timeSlot,
+    }), { headers });
+
+    const bookingOk = check(bookingRes, {
+      'booking succeeded or conflicted': (r) => r.status === 201 || r.status === 409,
+    });
+
+    bookingLatency.add(bookingRes.timings.duration);
+
+    if (bookingRes.status === 201) {
+      bookingSuccessRate.add(true);
+      bookingConflictRate.add(false);
+    } else if (bookingRes.status === 409) {
+      bookingSuccessRate.add(false);
+      bookingConflictRate.add(true);
+    } else {
+      bookingSuccessRate.add(false);
+      bookingConflictRate.add(false);
+      errorRate.add(true);
+    }
+
+    sleep(0.5);
+  }
 }
