@@ -39,8 +39,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: Validate NGINX config
         run: |
+          sed 's/worker:8000/127.0.0.1:8000/g' nginx/nginx.conf > /tmp/nginx-ci.conf
           docker run --rm \
-            -v $(pwd)/nginx:/etc/nginx/custom:ro \
+            -v /tmp/nginx-ci.conf:/etc/nginx/custom/nginx.conf:ro \
             nginx:1.25-alpine \
             nginx -t -c /etc/nginx/custom/nginx.conf
 
