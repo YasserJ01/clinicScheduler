@@ -30,10 +30,14 @@ async def get_analytics_summary(
 
     where_clauses = []
     if from_date:
-        from_dt = datetime.fromisoformat(from_date.replace("Z", "+00:00")).replace(tzinfo=None)
+        from_dt = datetime.fromisoformat(from_date.replace("Z", "+00:00")).replace(
+            tzinfo=None
+        )
         where_clauses.append(Appointment.appointment_time >= from_dt)
     if to_date:
-        to_dt = datetime.fromisoformat(to_date.replace("Z", "+00:00")).replace(tzinfo=None)
+        to_dt = datetime.fromisoformat(to_date.replace("Z", "+00:00")).replace(
+            tzinfo=None
+        )
         where_clauses.append(Appointment.appointment_time <= to_dt)
 
     total_appts_stmt = select(func.count(Appointment.id))
@@ -50,7 +54,9 @@ async def get_analytics_summary(
     cancelled_result = await db.execute(cancelled_stmt)
     cancelled_count = cancelled_result.scalar() or 0
 
-    cancellation_rate = (cancelled_count / total_appointments * 100) if total_appointments > 0 else 0
+    cancellation_rate = (
+        (cancelled_count / total_appointments * 100) if total_appointments > 0 else 0
+    )
 
     avg_duration_stmt = select(func.avg(Appointment.duration_minutes))
     if where_clauses:
@@ -117,10 +123,21 @@ async def get_doctor_utilisation(
     total_days = (to_dt - from_dt).days + 1
     schedule = await doctor_repo.get_schedule(doctor_id)
     if schedule:
-        total_slots = sum(
-            int((s.end_time.hour * 60 + s.end_time.minute - s.start_time.hour * 60 - s.start_time.minute) / 30)
-            for s in schedule
-        ) * total_days
+        total_slots = (
+            sum(
+                int(
+                    (
+                        s.end_time.hour * 60
+                        + s.end_time.minute
+                        - s.start_time.hour * 60
+                        - s.start_time.minute
+                    )
+                    / 30
+                )
+                for s in schedule
+            )
+            * total_days
+        )
     else:
         total_slots = 18 * total_days
 
@@ -192,16 +209,18 @@ async def get_patient_history(
     for appt in appointments:
         doctor = await db.execute(select(Doctor).where(Doctor.id == appt.doctor_id))
         d = doctor.scalar_one_or_none()
-        history.append({
-            "id": appt.id,
-            "doctor_name": d.name if d else "Unknown",
-            "doctor_specialty": d.specialty if d else "Unknown",
-            "appointment_time": appt.appointment_time.isoformat(),
-            "duration_minutes": appt.duration_minutes,
-            "status": appt.status.value,
-            "notes": appt.notes,
-            "created_at": appt.created_at.isoformat() if appt.created_at else None,
-        })
+        history.append(
+            {
+                "id": appt.id,
+                "doctor_name": d.name if d else "Unknown",
+                "doctor_specialty": d.specialty if d else "Unknown",
+                "appointment_time": appt.appointment_time.isoformat(),
+                "duration_minutes": appt.duration_minutes,
+                "status": appt.status.value,
+                "notes": appt.notes,
+                "created_at": appt.created_at.isoformat() if appt.created_at else None,
+            }
+        )
 
     return {
         "patient_id": patient_id,
@@ -230,10 +249,14 @@ async def get_audit_log(
     if action:
         where_clauses.append(AuditLog.action == action)
     if from_date:
-        from_dt = datetime.fromisoformat(from_date.replace("Z", "+00:00")).replace(tzinfo=None)
+        from_dt = datetime.fromisoformat(from_date.replace("Z", "+00:00")).replace(
+            tzinfo=None
+        )
         where_clauses.append(AuditLog.created_at >= from_dt)
     if to_date:
-        to_dt = datetime.fromisoformat(to_date.replace("Z", "+00:00")).replace(tzinfo=None)
+        to_dt = datetime.fromisoformat(to_date.replace("Z", "+00:00")).replace(
+            tzinfo=None
+        )
         where_clauses.append(AuditLog.created_at <= to_dt)
 
     count_stmt = select(func.count()).select_from(AuditLog)

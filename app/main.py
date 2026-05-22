@@ -51,6 +51,7 @@ async def lifespan(app: FastAPI):
     if os.getenv("ENABLE_TELEMETRY", "false").lower() == "true":
         try:
             from app.core.telemetry import setup_telemetry
+
             setup_telemetry(app)
         except Exception as e:
             logging.getLogger("clinic.main").warning("Telemetry init failed: %s", e)

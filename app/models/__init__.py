@@ -50,7 +50,9 @@ class Doctor(Base):
     __tablename__ = "doctors"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, unique=True, index=True)
+    user_id = Column(
+        Integer, ForeignKey("users.id"), nullable=True, unique=True, index=True
+    )
     name = Column(String(200), nullable=False)
     specialty = Column(String(100), nullable=False)
     is_active = Column(Boolean, nullable=False, default=True)
@@ -163,7 +165,9 @@ class Webhook(Base):
     created_by = Column(String(100), nullable=False)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
-    deliveries = relationship("WebhookDelivery", back_populates="webhook", cascade="all, delete-orphan")
+    deliveries = relationship(
+        "WebhookDelivery", back_populates="webhook", cascade="all, delete-orphan"
+    )
 
 
 class WebhookDelivery(Base):
