@@ -31,7 +31,9 @@ class TestConcurrentBooking:
             futures = []
             for _ in range(2):
                 futures.append(
-                    executor.submit(self._book_appointment, payload, auth_headers, base_url)
+                    executor.submit(
+                        self._book_appointment, payload, auth_headers, base_url
+                    )
                 )
             for future in as_completed(futures):
                 results.append(future.result())
