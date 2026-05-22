@@ -19,17 +19,23 @@ class UserRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def get_by_username(self, username: str) -> User | None:
-        result = await self.session.execute(
-            select(User).where(User.username == username)
-        )
+    async def get_by_username(
+        self, username: str, tenant_id: int | None = None
+    ) -> User | None:
+        where_clauses = [User.username == username]
+        if tenant_id is not None:
+            where_clauses.append(User.tenant_id == tenant_id)
+        result = await self.session.execute(select(User).where(*where_clauses))
         return result.scalar_one_or_none()
 
-    async def create(self, username: str, password: str, role: str = "patient") -> User:
+    async def create(
+        self, username: str, password: str, role: str = "patient", tenant_id: int = 1
+    ) -> User:
         user = User(
             username=username,
             hashed_password=get_password_hash(password),
             role=UserRole(role),
+            tenant_id=tenant_id,
         )
         self.session.add(user)
         await self.session.flush()
@@ -40,17 +46,24 @@ class DoctorRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def list_all(self) -> Sequence[Doctor]:
-        result = await self.session.execute(
-            select(Doctor).where(Doctor.is_active.is_(True))
-        )
+    async def list_all(self, tenant_id: int | None = None) -> Sequence[Doctor]:
+        where_clauses = [Doctor.is_active.is_(True)]
+        if tenant_id is not None:
+            where_clauses.append(Doctor.tenant_id == tenant_id)
+        result = await self.session.execute(select(Doctor).where(*where_clauses))
         return result.scalars().all()
 
     async def list_paginated(
-        self, page: int = 1, page_size: int = 20, specialty: str | None = None
+        self,
+        page: int = 1,
+        page_size: int = 20,
+        specialty: str | None = None,
+        tenant_id: int | None = None,
     ) -> tuple[Sequence[Doctor], int]:
         page_size = min(page_size, 100)
         where_clauses = [Doctor.is_active.is_(True)]
+        if tenant_id is not None:
+            where_clauses.append(Doctor.tenant_id == tenant_id)
         if specialty:
             where_clauses.append(Doctor.specialty.ilike(f"%{specialty}%"))
         count_stmt = select(func.count()).select_from(Doctor).where(*where_clauses)
@@ -65,14 +78,17 @@ class DoctorRepository:
         result = await self.session.execute(stmt)
         return result.scalars().all(), total
 
-    async def get_by_id(self, doctor_id: int) -> Doctor | None:
-        result = await self.session.execute(
-            select(Doctor).where(Doctor.id == doctor_id)
-        )
+    async def get_by_id(
+        self, doctor_id: int, tenant_id: int | None = None
+    ) -> Doctor | None:
+        where_clauses = [Doctor.id == doctor_id]
+        if tenant_id is not None:
+            where_clauses.append(Doctor.tenant_id == tenant_id)
+        result = await self.session.execute(select(Doctor).where(*where_clauses))
         return result.scalar_one_or_none()
 
-    async def create(self, name: str, specialty: str) -> Doctor:
-        doctor = Doctor(name=name, specialty=specialty)
+    async def create(self, name: str, specialty: str, tenant_id: int = 1) -> Doctor:
+        doctor = Doctor(name=name, specialty=specialty, tenant_id=tenant_id)
         self.session.add(doctor)
         await self.session.flush()
         return doctor
@@ -99,7 +115,7 @@ class DoctorRepository:
         return result.scalars().all()
 
     async def set_schedule(
-        self, doctor_id: int, schedules: list[dict]
+        self, doctor_id: int, schedules: list[dict], tenant_id: int = 1
     ) -> Sequence[DoctorSchedule]:
         result = await self.session.execute(
             select(DoctorSchedule).where(DoctorSchedule.doctor_id == doctor_id)
@@ -112,6 +128,7 @@ class DoctorRepository:
         for s in schedules:
             ns = DoctorSchedule(
                 doctor_id=doctor_id,
+                tenant_id=tenant_id,
                 day_of_week=s["day_of_week"],
                 start_time=s["start_time"],
                 end_time=s["end_time"],
@@ -172,15 +189,24 @@ class PatientRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def list_all(self) -> Sequence[Patient]:
-        result = await self.session.execute(select(Patient))
+    async def list_all(self, tenant_id: int | None = None) -> Sequence[Patient]:
+        where_clauses = []
+        if tenant_id is not None:
+            where_clauses.append(Patient.tenant_id == tenant_id)
+        result = await self.session.execute(select(Patient).where(*where_clauses))
         return result.scalars().all()
 
     async def list_paginated(
-        self, page: int = 1, page_size: int = 20, search: str | None = None
+        self,
+        page: int = 1,
+        page_size: int = 20,
+        search: str | None = None,
+        tenant_id: int | None = None,
     ) -> tuple[Sequence[Patient], int]:
         page_size = min(page_size, 100)
         where_clauses = []
+        if tenant_id is not None:
+            where_clauses.append(Patient.tenant_id == tenant_id)
         if search:
             where_clauses.append(Patient.name.ilike(f"%{search}%"))
         count_stmt = select(func.count()).select_from(Patient)
@@ -195,19 +221,26 @@ class PatientRepository:
         result = await self.session.execute(stmt)
         return result.scalars().all(), total
 
-    async def get_by_id(self, patient_id: int) -> Patient | None:
-        result = await self.session.execute(
-            select(Patient).where(Patient.id == patient_id)
-        )
+    async def get_by_id(
+        self, patient_id: int, tenant_id: int | None = None
+    ) -> Patient | None:
+        where_clauses = [Patient.id == patient_id]
+        if tenant_id is not None:
+            where_clauses.append(Patient.tenant_id == tenant_id)
+        result = await self.session.execute(select(Patient).where(*where_clauses))
         return result.scalar_one_or_none()
 
-    async def get_or_create_by_email(self, name: str, email: str) -> Patient:
+    async def get_or_create_by_email(
+        self, name: str, email: str, tenant_id: int = 1
+    ) -> Patient:
         result = await self.session.execute(
-            select(Patient).where(Patient.email == email)
+            select(Patient).where(
+                Patient.email == email, Patient.tenant_id == tenant_id
+            )
         )
         patient = result.scalar_one_or_none()
         if not patient:
-            patient = Patient(name=name, email=email)
+            patient = Patient(name=name, email=email, tenant_id=tenant_id)
             self.session.add(patient)
             await self.session.flush()
         return patient
@@ -232,11 +265,16 @@ class PatientRepository:
         await self.session.flush()
         return patient
 
-    async def get_patients_for_doctor(self, doctor_id: int) -> Sequence[Patient]:
+    async def get_patients_for_doctor(
+        self, doctor_id: int, tenant_id: int | None = None
+    ) -> Sequence[Patient]:
+        where_clauses = [Appointment.doctor_id == doctor_id]
+        if tenant_id is not None:
+            where_clauses.append(Appointment.tenant_id == tenant_id)
         result = await self.session.execute(
             select(Patient)
             .join(Appointment, Patient.id == Appointment.patient_id)
-            .where(Appointment.doctor_id == doctor_id)
+            .where(*where_clauses)
             .distinct()
             .order_by(Patient.name)
         )
@@ -254,9 +292,14 @@ class AppointmentRepository:
         "cancelled": [],
     }
 
-    async def list_all(self) -> Sequence[Appointment]:
+    async def list_all(self, tenant_id: int | None = None) -> Sequence[Appointment]:
+        where_clauses = []
+        if tenant_id is not None:
+            where_clauses.append(Appointment.tenant_id == tenant_id)
         result = await self.session.execute(
-            select(Appointment).order_by(Appointment.appointment_time)
+            select(Appointment)
+            .where(*where_clauses)
+            .order_by(Appointment.appointment_time)
         )
         return result.scalars().all()
 
@@ -269,9 +312,12 @@ class AppointmentRepository:
         status: str | None = None,
         from_date: datetime | None = None,
         to_date: datetime | None = None,
+        tenant_id: int | None = None,
     ) -> tuple[Sequence[Appointment], int]:
         page_size = min(page_size, 100)
         where_clauses = []
+        if tenant_id is not None:
+            where_clauses.append(Appointment.tenant_id == tenant_id)
         if doctor_id is not None:
             where_clauses.append(Appointment.doctor_id == doctor_id)
         if patient_id is not None:
@@ -294,10 +340,13 @@ class AppointmentRepository:
         result = await self.session.execute(stmt)
         return result.scalars().all(), total
 
-    async def get_by_id(self, appointment_id: int) -> Appointment | None:
-        result = await self.session.execute(
-            select(Appointment).where(Appointment.id == appointment_id)
-        )
+    async def get_by_id(
+        self, appointment_id: int, tenant_id: int | None = None
+    ) -> Appointment | None:
+        where_clauses = [Appointment.id == appointment_id]
+        if tenant_id is not None:
+            where_clauses.append(Appointment.tenant_id == tenant_id)
+        result = await self.session.execute(select(Appointment).where(*where_clauses))
         return result.scalar_one_or_none()
 
     async def create(
@@ -306,6 +355,7 @@ class AppointmentRepository:
         patient_id: int,
         appointment_time: datetime,
         duration_minutes: int = 30,
+        tenant_id: int = 1,
     ) -> Appointment:
         naive_time = (
             appointment_time.replace(tzinfo=None)
@@ -318,30 +368,38 @@ class AppointmentRepository:
             appointment_time=naive_time,
             duration_minutes=duration_minutes,
             status=AppointmentStatus.SCHEDULED,
+            tenant_id=tenant_id,
         )
         self.session.add(appointment)
         await self.session.flush()
         return appointment
 
     async def get_booked_slots(
-        self, doctor_id: int, date: datetime
+        self, doctor_id: int, date: datetime, tenant_id: int | None = None
     ) -> Sequence[Appointment]:
         day_start = date.replace(hour=0, minute=0, second=0, microsecond=0)
         day_end = day_start + timedelta(days=1)
+        where_clauses = [
+            Appointment.doctor_id == doctor_id,
+            Appointment.appointment_time >= day_start,
+            Appointment.appointment_time < day_end,
+            Appointment.status != AppointmentStatus.CANCELLED,
+        ]
+        if tenant_id is not None:
+            where_clauses.append(Appointment.tenant_id == tenant_id)
         result = await self.session.execute(
             select(Appointment)
-            .where(
-                Appointment.doctor_id == doctor_id,
-                Appointment.appointment_time >= day_start,
-                Appointment.appointment_time < day_end,
-                Appointment.status != AppointmentStatus.CANCELLED,
-            )
+            .where(*where_clauses)
             .order_by(Appointment.appointment_time)
         )
         return result.scalars().all()
 
     async def check_conflict(
-        self, doctor_id: int, appointment_time: datetime, duration_minutes: int = 30
+        self,
+        doctor_id: int,
+        appointment_time: datetime,
+        duration_minutes: int = 30,
+        tenant_id: int | None = None,
     ) -> Appointment | None:
         naive_time = (
             appointment_time.replace(tzinfo=None)
@@ -351,14 +409,16 @@ class AppointmentRepository:
         end_time = naive_time + timedelta(minutes=duration_minutes)
         lower_bound = naive_time - timedelta(minutes=480)
 
-        result = await self.session.execute(
-            select(Appointment).where(
-                Appointment.doctor_id == doctor_id,
-                Appointment.appointment_time >= lower_bound,
-                Appointment.appointment_time < end_time,
-                Appointment.status != AppointmentStatus.CANCELLED,
-            )
-        )
+        where_clauses = [
+            Appointment.doctor_id == doctor_id,
+            Appointment.appointment_time >= lower_bound,
+            Appointment.appointment_time < end_time,
+            Appointment.status != AppointmentStatus.CANCELLED,
+        ]
+        if tenant_id is not None:
+            where_clauses.append(Appointment.tenant_id == tenant_id)
+
+        result = await self.session.execute(select(Appointment).where(*where_clauses))
         appointments = result.scalars().all()
 
         for appt in appointments:
@@ -400,11 +460,13 @@ class AppointmentRepository:
         duration_minutes: int,
         recurrence: str,
         occurrences: int,
+        tenant_id: int = 1,
     ) -> tuple[RecurringSeries, list[Appointment], list[dict]]:
         series = RecurringSeries(
             doctor_id=doctor_id,
             patient_id=patient_id,
             recurrence=recurrence,
+            tenant_id=tenant_id,
         )
         self.session.add(series)
         await self.session.flush()
@@ -414,7 +476,9 @@ class AppointmentRepository:
         current = start_time.replace(tzinfo=None)
 
         for i in range(occurrences):
-            conflict = await self.check_conflict(doctor_id, current, duration_minutes)
+            conflict = await self.check_conflict(
+                doctor_id, current, duration_minutes, tenant_id=tenant_id
+            )
             if conflict:
                 conflicts.append(
                     {
@@ -430,6 +494,7 @@ class AppointmentRepository:
                     duration_minutes=duration_minutes,
                     status=AppointmentStatus.SCHEDULED,
                     series_id=series.id,
+                    tenant_id=tenant_id,
                 )
                 self.session.add(appt)
                 created.append(appt)
@@ -467,16 +532,19 @@ class AppointmentRepository:
         await self.session.flush()
         return count
 
-    async def get_due_reminders(self) -> Sequence[Appointment]:
+    async def get_due_reminders(
+        self, tenant_id: int | None = None
+    ) -> Sequence[Appointment]:
         now = datetime.utcnow()
-        result = await self.session.execute(
-            select(Appointment).where(
-                Appointment.appointment_time <= now + timedelta(hours=24),
-                Appointment.appointment_time > now,
-                Appointment.status.in_(["scheduled", "confirmed"]),
-                Appointment.reminder_sent.is_(False),
-            )
-        )
+        where_clauses = [
+            Appointment.appointment_time <= now + timedelta(hours=24),
+            Appointment.appointment_time > now,
+            Appointment.status.in_(["scheduled", "confirmed"]),
+            Appointment.reminder_sent.is_(False),
+        ]
+        if tenant_id is not None:
+            where_clauses.append(Appointment.tenant_id == tenant_id)
+        result = await self.session.execute(select(Appointment).where(*where_clauses))
         return result.scalars().all()
 
     async def mark_reminder_sent(self, appointment_id: int) -> None:
@@ -488,34 +556,42 @@ class AppointmentRepository:
             appt.reminder_sent = True
             await self.session.flush()
 
-    async def get_today_appointments(self, doctor_id: int) -> Sequence[Appointment]:
+    async def get_today_appointments(
+        self, doctor_id: int, tenant_id: int | None = None
+    ) -> Sequence[Appointment]:
         now = datetime.utcnow()
         day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         day_end = day_start + timedelta(days=1)
+        where_clauses = [
+            Appointment.doctor_id == doctor_id,
+            Appointment.appointment_time >= day_start,
+            Appointment.appointment_time < day_end,
+        ]
+        if tenant_id is not None:
+            where_clauses.append(Appointment.tenant_id == tenant_id)
         result = await self.session.execute(
             select(Appointment)
-            .where(
-                Appointment.doctor_id == doctor_id,
-                Appointment.appointment_time >= day_start,
-                Appointment.appointment_time < day_end,
-            )
+            .where(*where_clauses)
             .order_by(Appointment.appointment_time)
         )
         return result.scalars().all()
 
     async def get_upcoming_appointments(
-        self, doctor_id: int, days: int = 7
+        self, doctor_id: int, days: int = 7, tenant_id: int | None = None
     ) -> Sequence[Appointment]:
         now = datetime.utcnow()
         end = now + timedelta(days=days)
+        where_clauses = [
+            Appointment.doctor_id == doctor_id,
+            Appointment.appointment_time >= now,
+            Appointment.appointment_time <= end,
+            Appointment.status.in_(["scheduled", "confirmed"]),
+        ]
+        if tenant_id is not None:
+            where_clauses.append(Appointment.tenant_id == tenant_id)
         result = await self.session.execute(
             select(Appointment)
-            .where(
-                Appointment.doctor_id == doctor_id,
-                Appointment.appointment_time >= now,
-                Appointment.appointment_time <= end,
-                Appointment.status.in_(["scheduled", "confirmed"]),
-            )
+            .where(*where_clauses)
             .order_by(Appointment.appointment_time)
         )
         return result.scalars().all()

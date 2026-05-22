@@ -39,8 +39,11 @@ async def create_patient(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    tenant_id = current_user.get("tenant_id", 1)
     repo = PatientRepository(db)
-    patient = await repo.get_or_create_by_email(req.name, req.email)
+    patient = await repo.get_or_create_by_email(
+        req.name, req.email, tenant_id=tenant_id
+    )
     return {"id": patient.id, "name": patient.name, "email": patient.email}
 
 
@@ -52,9 +55,10 @@ async def list_patients(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    tenant_id = current_user.get("tenant_id")
     repo = PatientRepository(db)
     patients, total = await repo.list_paginated(
-        page=page, page_size=page_size, search=search
+        page=page, page_size=page_size, search=search, tenant_id=tenant_id
     )
     items = [{"id": p.id, "name": p.name, "email": p.email} for p in patients]
     pages = math.ceil(total / page_size) if total > 0 else 0
@@ -72,9 +76,13 @@ async def get_my_profile(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    tenant_id = current_user.get("tenant_id", 1)
     username = current_user["user_id"]
     result = await db.execute(
-        select(Patient).where(Patient.email == f"{username}@clinic.com")
+        select(Patient).where(
+            Patient.email == f"{username}@clinic.com",
+            Patient.tenant_id == tenant_id,
+        )
     )
     patient = result.scalar_one_or_none()
     if patient:
@@ -91,8 +99,9 @@ async def get_patient(
     role = current_user.get("role", "patient")
     if role not in ("admin", "doctor"):
         raise HTTPException(status_code=403, detail="Admin or doctor access required")
+    tenant_id = current_user.get("tenant_id")
     repo = PatientRepository(db)
-    patient = await repo.get_by_id(patient_id)
+    patient = await repo.get_by_id(patient_id, tenant_id=tenant_id)
     if not patient:
         raise HTTPException(status_code=404, detail="Patient not found")
     return {"id": patient.id, "name": patient.name, "email": patient.email}
@@ -107,7 +116,11 @@ async def update_patient(
 ):
     if current_user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
+    tenant_id = current_user.get("tenant_id")
     repo = PatientRepository(db)
+    patient = await repo.get_by_id(patient_id, tenant_id=tenant_id)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
     try:
         updated = await repo.update(
             patient_id, name=req.name, email=req.email, phone=req.phone

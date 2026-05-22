@@ -125,6 +125,7 @@ async def list_appointments(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    tenant_id = current_user.get("tenant_id")
     repo = AppointmentRepository(db)
     from_dt = _parse_time_slot(from_date) if from_date else None
     to_dt = _parse_time_slot(to_date) if to_date else None
@@ -136,11 +137,12 @@ async def list_appointments(
         status=status,
         from_date=from_dt,
         to_date=to_dt,
+        tenant_id=tenant_id,
     )
     result = []
     for appt in appointments:
         patient_repo = PatientRepository(db)
-        patient = await patient_repo.get_by_id(appt.patient_id)
+        patient = await patient_repo.get_by_id(appt.patient_id, tenant_id=tenant_id)
         result.append(
             {
                 "id": appt.id,
@@ -170,6 +172,7 @@ async def create_appointment(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    tenant_id = current_user.get("tenant_id", 1)
     patient_id_str = str(appt.patient_id)
 
     if patient_id_str == "999" and settings.CHAOS_ENABLED:
@@ -183,7 +186,7 @@ async def create_appointment(
     naive_time = _parse_time_slot(appt.time_slot)
 
     doctor_repo = DoctorRepository(db)
-    doctor = await doctor_repo.get_by_id(appt.doctor_id)
+    doctor = await doctor_repo.get_by_id(appt.doctor_id, tenant_id=tenant_id)
     if not doctor or not doctor.is_active:
         return JSONResponse(
             status_code=400,
@@ -196,11 +199,11 @@ async def create_appointment(
 
     appt_repo = AppointmentRepository(db)
     conflict = await appt_repo.check_conflict(
-        appt.doctor_id, naive_time, appt.duration_minutes
+        appt.doctor_id, naive_time, appt.duration_minutes, tenant_id=tenant_id
     )
     if conflict:
         patient_repo = PatientRepository(db)
-        holder = await patient_repo.get_by_id(conflict.patient_id)
+        holder = await patient_repo.get_by_id(conflict.patient_id, tenant_id=tenant_id)
         holder_name = holder.name if holder else "Unknown"
         conflict_resp = BookingResponse(
             success=False,
@@ -219,7 +222,7 @@ async def create_appointment(
         return JSONResponse(status_code=409, content=conflict_resp.model_dump())
 
     patient_repo = PatientRepository(db)
-    patient = await patient_repo.get_by_id(int(patient_id_str))
+    patient = await patient_repo.get_by_id(int(patient_id_str), tenant_id=tenant_id)
     if not patient:
         return JSONResponse(
             status_code=404,
@@ -236,15 +239,18 @@ async def create_appointment(
             patient_id=patient.id,
             appointment_time=naive_time,
             duration_minutes=appt.duration_minutes,
+            tenant_id=tenant_id,
         )
     except IntegrityError:
         await db.rollback()
         conflict = await appt_repo.check_conflict(
-            appt.doctor_id, naive_time, appt.duration_minutes
+            appt.doctor_id, naive_time, appt.duration_minutes, tenant_id=tenant_id
         )
         if conflict:
             patient_repo = PatientRepository(db)
-            holder = await patient_repo.get_by_id(conflict.patient_id)
+            holder = await patient_repo.get_by_id(
+                conflict.patient_id, tenant_id=tenant_id
+            )
             holder_name = holder.name if holder else "Unknown"
             conflict_resp = BookingResponse(
                 success=False,
@@ -306,15 +312,16 @@ async def create_recurring_appointment(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    tenant_id = current_user.get("tenant_id", 1)
     naive_time = _parse_time_slot(req.start_time)
 
     doctor_repo = DoctorRepository(db)
-    doctor = await doctor_repo.get_by_id(req.doctor_id)
+    doctor = await doctor_repo.get_by_id(req.doctor_id, tenant_id=tenant_id)
     if not doctor or not doctor.is_active:
         raise HTTPException(status_code=400, detail="Doctor not found or inactive")
 
     patient_repo = PatientRepository(db)
-    patient = await patient_repo.get_by_id(req.patient_id)
+    patient = await patient_repo.get_by_id(req.patient_id, tenant_id=tenant_id)
     if not patient:
         raise HTTPException(status_code=404, detail="Patient not found")
 
@@ -327,6 +334,7 @@ async def create_recurring_appointment(
             duration_minutes=req.duration_minutes,
             recurrence=req.recurrence,
             occurrences=req.occurrences,
+            tenant_id=tenant_id,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -404,6 +412,7 @@ async def get_available_slots(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    tenant_id = current_user.get("tenant_id")
     try:
         target_date = datetime.fromisoformat(date.replace("Z", "+00:00")).replace(
             tzinfo=None
@@ -439,7 +448,7 @@ async def get_available_slots(
         slot_end = target_date.replace(hour=17, minute=0, second=0, microsecond=0)
 
     repo = AppointmentRepository(db)
-    booked = await repo.get_booked_slots(doctor_id, target_date)
+    booked = await repo.get_booked_slots(doctor_id, target_date, tenant_id=tenant_id)
 
     booked_ranges = []
     for appt in booked:
@@ -482,6 +491,7 @@ async def update_appointment_status(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    tenant_id = current_user.get("tenant_id")
     role = current_user.get("role", "patient")
     username = current_user["user_id"]
 
@@ -491,7 +501,7 @@ async def update_appointment_status(
         raise HTTPException(status_code=422, detail=f"Invalid status: {req.status}")
 
     appt_repo = AppointmentRepository(db)
-    appt = await appt_repo.get_by_id(appointment_id)
+    appt = await appt_repo.get_by_id(appointment_id, tenant_id=tenant_id)
     if not appt:
         raise HTTPException(status_code=404, detail="Appointment not found")
 
@@ -501,7 +511,7 @@ async def update_appointment_status(
                 status_code=403, detail="Patients can only cancel appointments"
             )
         patient_repo = PatientRepository(db)
-        patient = await patient_repo.get_by_id(appt.patient_id)
+        patient = await patient_repo.get_by_id(appt.patient_id, tenant_id=tenant_id)
         if not patient or patient.email != f"{username}@clinic.com":
             raise HTTPException(
                 status_code=403, detail="Cannot cancel another patient's appointment"
@@ -540,7 +550,7 @@ async def update_appointment_status(
     )
 
     patient_repo = PatientRepository(db)
-    patient = await patient_repo.get_by_id(appt.patient_id)
+    patient = await patient_repo.get_by_id(appt.patient_id, tenant_id=tenant_id)
 
     appt_detail = {
         "doctor_id": updated.doctor_id,
@@ -571,6 +581,7 @@ async def update_appointment_notes(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    tenant_id = current_user.get("tenant_id")
     role = current_user.get("role", "patient")
     if role not in ("doctor", "admin"):
         raise HTTPException(
@@ -578,6 +589,9 @@ async def update_appointment_notes(
         )
 
     appt_repo = AppointmentRepository(db)
+    appt = await appt_repo.get_by_id(appointment_id, tenant_id=tenant_id)
+    if not appt:
+        raise HTTPException(status_code=404, detail="Appointment not found")
     updated = await appt_repo.update_notes(appointment_id, req.notes)
     if not updated:
         raise HTTPException(status_code=404, detail="Appointment not found")
@@ -592,7 +606,7 @@ async def update_appointment_notes(
     )
 
     patient_repo = PatientRepository(db)
-    patient = await patient_repo.get_by_id(updated.patient_id)
+    patient = await patient_repo.get_by_id(updated.patient_id, tenant_id=tenant_id)
 
     return {
         "id": updated.id,
@@ -612,13 +626,14 @@ async def get_appointment(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    tenant_id = current_user.get("tenant_id")
     repo = AppointmentRepository(db)
-    appt = await repo.get_by_id(appointment_id)
+    appt = await repo.get_by_id(appointment_id, tenant_id=tenant_id)
     if not appt:
         raise HTTPException(status_code=404, detail="Appointment not found")
 
     patient_repo = PatientRepository(db)
-    patient = await patient_repo.get_by_id(appt.patient_id)
+    patient = await patient_repo.get_by_id(appt.patient_id, tenant_id=tenant_id)
 
     return {
         "id": appt.id,

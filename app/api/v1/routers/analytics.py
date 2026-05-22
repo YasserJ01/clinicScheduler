@@ -27,8 +27,11 @@ async def get_analytics_summary(
     db: AsyncSession = Depends(get_db),
 ):
     _require_admin(current_user)
+    tenant_id = current_user.get("tenant_id")
 
     where_clauses = []
+    if tenant_id is not None:
+        where_clauses.append(Appointment.tenant_id == tenant_id)
     if from_date:
         from_dt = datetime.fromisoformat(from_date.replace("Z", "+00:00")).replace(
             tzinfo=None
@@ -46,11 +49,14 @@ async def get_analytics_summary(
     total_appts_result = await db.execute(total_appts_stmt)
     total_appointments = total_appts_result.scalar() or 0
 
-    cancelled_stmt = select(func.count(Appointment.id)).where(
-        Appointment.status == AppointmentStatus.CANCELLED
-    )
-    if where_clauses:
-        cancelled_stmt = cancelled_stmt.where(*where_clauses)
+    cancelled_where = [Appointment.status == AppointmentStatus.CANCELLED]
+    if tenant_id is not None:
+        cancelled_where.append(Appointment.tenant_id == tenant_id)
+    if from_date:
+        cancelled_where.append(Appointment.appointment_time >= from_dt)
+    if to_date:
+        cancelled_where.append(Appointment.appointment_time <= to_dt)
+    cancelled_stmt = select(func.count(Appointment.id)).where(*cancelled_where)
     cancelled_result = await db.execute(cancelled_stmt)
     cancelled_count = cancelled_result.scalar() or 0
 
@@ -58,16 +64,35 @@ async def get_analytics_summary(
         (cancelled_count / total_appointments * 100) if total_appointments > 0 else 0
     )
 
+    avg_duration_where = []
+    if tenant_id is not None:
+        avg_duration_where.append(Appointment.tenant_id == tenant_id)
+    if from_date:
+        avg_duration_where.append(Appointment.appointment_time >= from_dt)
+    if to_date:
+        avg_duration_where.append(Appointment.appointment_time <= to_dt)
     avg_duration_stmt = select(func.avg(Appointment.duration_minutes))
-    if where_clauses:
-        avg_duration_stmt = avg_duration_stmt.where(*where_clauses)
+    if avg_duration_where:
+        avg_duration_stmt = avg_duration_stmt.where(*avg_duration_where)
     avg_duration_result = await db.execute(avg_duration_stmt)
     avg_duration = round(avg_duration_result.scalar() or 0, 1)
 
-    total_patients_result = await db.execute(select(func.count(Patient.id)))
+    patient_where = []
+    if tenant_id is not None:
+        patient_where.append(Patient.tenant_id == tenant_id)
+    total_patients_stmt = select(func.count(Patient.id))
+    if patient_where:
+        total_patients_stmt = total_patients_stmt.where(*patient_where)
+    total_patients_result = await db.execute(total_patients_stmt)
     total_patients = total_patients_result.scalar() or 0
 
-    total_doctors_result = await db.execute(select(func.count(Doctor.id)))
+    doctor_where = []
+    if tenant_id is not None:
+        doctor_where.append(Doctor.tenant_id == tenant_id)
+    total_doctors_stmt = select(func.count(Doctor.id))
+    if doctor_where:
+        total_doctors_stmt = total_doctors_stmt.where(*doctor_where)
+    total_doctors_result = await db.execute(total_doctors_stmt)
     total_doctors = total_doctors_result.scalar() or 0
 
     return {

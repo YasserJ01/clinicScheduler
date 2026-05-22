@@ -68,9 +68,10 @@ async def list_doctors(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    tenant_id = current_user.get("tenant_id")
     repo = DoctorRepository(db)
     doctors, total = await repo.list_paginated(
-        page=page, page_size=page_size, specialty=specialty
+        page=page, page_size=page_size, specialty=specialty, tenant_id=tenant_id
     )
     items = [
         {"id": d.id, "name": d.name, "specialty": d.specialty, "is_active": d.is_active}
@@ -94,8 +95,11 @@ async def create_doctor(
 ):
     if current_user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
+    tenant_id = current_user.get("tenant_id")
     repo = DoctorRepository(db)
-    new_doctor = await repo.create(name=doctor.name, specialty=doctor.specialty)
+    new_doctor = await repo.create(
+        name=doctor.name, specialty=doctor.specialty, tenant_id=tenant_id
+    )
     return {
         "id": new_doctor.id,
         "name": new_doctor.name,
@@ -110,8 +114,9 @@ async def get_doctor(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    tenant_id = current_user.get("tenant_id")
     repo = DoctorRepository(db)
-    doctor = await repo.get_by_id(doctor_id)
+    doctor = await repo.get_by_id(doctor_id, tenant_id=tenant_id)
     if not doctor:
         raise HTTPException(status_code=404, detail="Doctor not found")
     return {
@@ -165,8 +170,9 @@ async def get_doctor_schedule(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    tenant_id = current_user.get("tenant_id")
     repo = DoctorRepository(db)
-    doctor = await repo.get_by_id(doctor_id)
+    doctor = await repo.get_by_id(doctor_id, tenant_id=tenant_id)
     if not doctor:
         raise HTTPException(status_code=404, detail="Doctor not found")
 
@@ -195,8 +201,9 @@ async def set_doctor_schedule(
     if role not in ("admin", "doctor"):
         raise HTTPException(status_code=403, detail="Insufficient permissions")
 
+    tenant_id = current_user.get("tenant_id")
     repo = DoctorRepository(db)
-    doctor = await repo.get_by_id(doctor_id)
+    doctor = await repo.get_by_id(doctor_id, tenant_id=tenant_id)
     if not doctor:
         raise HTTPException(status_code=404, detail="Doctor not found")
 
@@ -213,7 +220,7 @@ async def set_doctor_schedule(
         for s in schedules
     ]
 
-    result = await repo.set_schedule(doctor_id, schedule_data)
+    result = await repo.set_schedule(doctor_id, schedule_data, tenant_id=tenant_id)
     await audit_log(
         db,
         actor=current_user["user_id"],
@@ -252,8 +259,9 @@ async def update_schedule_day(
             status_code=422, detail="day_of_week must be 0-6 (Monday-Sunday)"
         )
 
+    tenant_id = current_user.get("tenant_id")
     repo = DoctorRepository(db)
-    doctor = await repo.get_by_id(doctor_id)
+    doctor = await repo.get_by_id(doctor_id, tenant_id=tenant_id)
     if not doctor:
         raise HTTPException(status_code=404, detail="Doctor not found")
 
@@ -305,8 +313,9 @@ async def delete_schedule_day(
             status_code=422, detail="day_of_week must be 0-6 (Monday-Sunday)"
         )
 
+    tenant_id = current_user.get("tenant_id")
     repo = DoctorRepository(db)
-    doctor = await repo.get_by_id(doctor_id)
+    doctor = await repo.get_by_id(doctor_id, tenant_id=tenant_id)
     if not doctor:
         raise HTTPException(status_code=404, detail="Doctor not found")
 
@@ -338,12 +347,17 @@ async def get_doctor_today_appointments(
     if role not in ("doctor", "admin"):
         raise HTTPException(status_code=403, detail="Doctor or admin access required")
 
+    tenant_id = current_user.get("tenant_id")
+
     if role == "doctor":
         from sqlalchemy import select
         from app.models import Doctor
 
         doc_result = await db.execute(
-            select(Doctor).where(Doctor.user_id == current_user.get("user_id"))
+            select(Doctor).where(
+                Doctor.user_id == current_user.get("user_id"),
+                Doctor.tenant_id == tenant_id,
+            )
         )
         linked_doctor = doc_result.scalar_one_or_none()
         if not linked_doctor or linked_doctor.id != doctor_id:
@@ -352,16 +366,16 @@ async def get_doctor_today_appointments(
             )
 
     repo = DoctorRepository(db)
-    doctor = await repo.get_by_id(doctor_id)
+    doctor = await repo.get_by_id(doctor_id, tenant_id=tenant_id)
     if not doctor:
         raise HTTPException(status_code=404, detail="Doctor not found")
 
     appt_repo = AppointmentRepository(db)
-    appts = await appt_repo.get_today_appointments(doctor_id)
+    appts = await appt_repo.get_today_appointments(doctor_id, tenant_id=tenant_id)
     result = []
     for appt in appts:
         patient_repo = PatientRepository(db)
-        patient = await patient_repo.get_by_id(appt.patient_id)
+        patient = await patient_repo.get_by_id(appt.patient_id, tenant_id=tenant_id)
         result.append(
             {
                 "id": appt.id,
@@ -391,12 +405,17 @@ async def get_doctor_upcoming_appointments(
     if role not in ("doctor", "admin"):
         raise HTTPException(status_code=403, detail="Doctor or admin access required")
 
+    tenant_id = current_user.get("tenant_id")
+
     if role == "doctor":
         from sqlalchemy import select
         from app.models import Doctor
 
         doc_result = await db.execute(
-            select(Doctor).where(Doctor.user_id == current_user.get("user_id"))
+            select(Doctor).where(
+                Doctor.user_id == current_user.get("user_id"),
+                Doctor.tenant_id == tenant_id,
+            )
         )
         linked_doctor = doc_result.scalar_one_or_none()
         if not linked_doctor or linked_doctor.id != doctor_id:
@@ -405,16 +424,18 @@ async def get_doctor_upcoming_appointments(
             )
 
     repo = DoctorRepository(db)
-    doctor = await repo.get_by_id(doctor_id)
+    doctor = await repo.get_by_id(doctor_id, tenant_id=tenant_id)
     if not doctor:
         raise HTTPException(status_code=404, detail="Doctor not found")
 
     appt_repo = AppointmentRepository(db)
-    appts = await appt_repo.get_upcoming_appointments(doctor_id, days=days)
+    appts = await appt_repo.get_upcoming_appointments(
+        doctor_id, days=days, tenant_id=tenant_id
+    )
     result = []
     for appt in appts:
         patient_repo = PatientRepository(db)
-        patient = await patient_repo.get_by_id(appt.patient_id)
+        patient = await patient_repo.get_by_id(appt.patient_id, tenant_id=tenant_id)
         result.append(
             {
                 "id": appt.id,
@@ -439,24 +460,31 @@ async def get_doctor_patients(
     if role not in ("doctor", "admin"):
         raise HTTPException(status_code=403, detail="Doctor or admin access required")
 
+    tenant_id = current_user.get("tenant_id")
+
     if role == "doctor":
         from sqlalchemy import select
         from app.models import Doctor
 
         doc_result = await db.execute(
-            select(Doctor).where(Doctor.user_id == current_user.get("user_id"))
+            select(Doctor).where(
+                Doctor.user_id == current_user.get("user_id"),
+                Doctor.tenant_id == tenant_id,
+            )
         )
         linked_doctor = doc_result.scalar_one_or_none()
         if not linked_doctor or linked_doctor.id != doctor_id:
             raise HTTPException(status_code=403, detail="Can only access own patients")
 
     repo = DoctorRepository(db)
-    doctor = await repo.get_by_id(doctor_id)
+    doctor = await repo.get_by_id(doctor_id, tenant_id=tenant_id)
     if not doctor:
         raise HTTPException(status_code=404, detail="Doctor not found")
 
     patient_repo = PatientRepository(db)
-    patients = await patient_repo.get_patients_for_doctor(doctor_id)
+    patients = await patient_repo.get_patients_for_doctor(
+        doctor_id, tenant_id=tenant_id
+    )
     result = [
         {"id": p.id, "name": p.name, "email": p.email, "phone": p.phone}
         for p in patients

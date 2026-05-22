@@ -23,6 +23,7 @@ class RegisterRequest(BaseModel):
     username: str
     password: str
     role: str = "patient"
+    tenant_id: int = 1
 
     @field_validator("password")
     @classmethod
@@ -57,11 +58,14 @@ async def register(
     db: AsyncSession = Depends(get_db),
 ):
     repo = UserRepository(db)
-    existing = await repo.get_by_username(req.username)
+    existing = await repo.get_by_username(req.username, tenant_id=req.tenant_id)
     if existing:
         raise HTTPException(status_code=400, detail="Username already exists")
     user = await repo.create(
-        username=req.username, password=req.password, role=req.role
+        username=req.username,
+        password=req.password,
+        role=req.role,
+        tenant_id=req.tenant_id,
     )
     raw_refresh, refresh_hash = create_refresh_token(user.username)
     expires_at = (
@@ -74,7 +78,7 @@ async def register(
     access_token = create_access_token(
         subject=user.username,
         expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
-        extra_claims={"role": req.role},
+        extra_claims={"role": req.role, "tenant_id": req.tenant_id},
     )
     return TokenResponse(access_token=access_token, refresh_token=raw_refresh)
 
@@ -98,7 +102,7 @@ async def login(
     access_token = create_access_token(
         subject=user.username,
         expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
-        extra_claims={"role": user.role.value},
+        extra_claims={"role": user.role.value, "tenant_id": user.tenant_id},
     )
     return TokenResponse(access_token=access_token, refresh_token=raw_refresh)
 
@@ -133,7 +137,10 @@ async def refresh_token(
     access_token = create_access_token(
         subject=matched_user.username,
         expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
-        extra_claims={"role": matched_user.role.value},
+        extra_claims={
+            "role": matched_user.role.value,
+            "tenant_id": matched_user.tenant_id,
+        },
     )
     return TokenResponse(access_token=access_token, refresh_token=new_raw)
 

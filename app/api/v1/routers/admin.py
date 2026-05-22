@@ -157,6 +157,7 @@ async def create_webhook(
     db: AsyncSession = Depends(get_db),
 ):
     _require_admin(current_user)
+    tenant_id = current_user.get("tenant_id", 1)
 
     secret = secrets.token_hex(32)
     webhook = Webhook(
@@ -165,6 +166,7 @@ async def create_webhook(
         events=json.dumps(req.events),
         is_active=req.is_active,
         created_by=current_user["user_id"],
+        tenant_id=tenant_id,
     )
     db.add(webhook)
     await db.flush()
@@ -196,11 +198,19 @@ async def list_webhooks(
     db: AsyncSession = Depends(get_db),
 ):
     _require_admin(current_user)
+    tenant_id = current_user.get("tenant_id")
 
-    count_result = await db.execute(select(func.count(Webhook.id)))
+    where_clauses = []
+    if tenant_id is not None:
+        where_clauses.append(Webhook.tenant_id == tenant_id)
+    count_stmt = select(func.count(Webhook.id))
+    if where_clauses:
+        count_stmt = count_stmt.where(*where_clauses)
+    count_result = await db.execute(count_stmt)
     total = count_result.scalar() or 0
     stmt = (
         select(Webhook)
+        .where(*where_clauses)
         .order_by(Webhook.created_at.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)
@@ -237,8 +247,11 @@ async def get_webhook(
     db: AsyncSession = Depends(get_db),
 ):
     _require_admin(current_user)
+    tenant_id = current_user.get("tenant_id")
 
-    result = await db.execute(select(Webhook).where(Webhook.id == webhook_id))
+    result = await db.execute(
+        select(Webhook).where(Webhook.id == webhook_id, Webhook.tenant_id == tenant_id)
+    )
     webhook = result.scalar_one_or_none()
     if not webhook:
         raise HTTPException(status_code=404, detail="Webhook not found")
@@ -261,8 +274,11 @@ async def update_webhook(
     db: AsyncSession = Depends(get_db),
 ):
     _require_admin(current_user)
+    tenant_id = current_user.get("tenant_id")
 
-    result = await db.execute(select(Webhook).where(Webhook.id == webhook_id))
+    result = await db.execute(
+        select(Webhook).where(Webhook.id == webhook_id, Webhook.tenant_id == tenant_id)
+    )
     webhook = result.scalar_one_or_none()
     if not webhook:
         raise HTTPException(status_code=404, detail="Webhook not found")
@@ -300,8 +316,11 @@ async def delete_webhook(
     db: AsyncSession = Depends(get_db),
 ):
     _require_admin(current_user)
+    tenant_id = current_user.get("tenant_id")
 
-    result = await db.execute(select(Webhook).where(Webhook.id == webhook_id))
+    result = await db.execute(
+        select(Webhook).where(Webhook.id == webhook_id, Webhook.tenant_id == tenant_id)
+    )
     webhook = result.scalar_one_or_none()
     if not webhook:
         raise HTTPException(status_code=404, detail="Webhook not found")
@@ -329,8 +348,11 @@ async def list_webhook_deliveries(
     db: AsyncSession = Depends(get_db),
 ):
     _require_admin(current_user)
+    tenant_id = current_user.get("tenant_id")
 
-    result = await db.execute(select(Webhook).where(Webhook.id == webhook_id))
+    result = await db.execute(
+        select(Webhook).where(Webhook.id == webhook_id, Webhook.tenant_id == tenant_id)
+    )
     webhook = result.scalar_one_or_none()
     if not webhook:
         raise HTTPException(status_code=404, detail="Webhook not found")
@@ -338,14 +360,18 @@ async def list_webhook_deliveries(
     from sqlalchemy import func as sql_func
 
     count_stmt = select(sql_func.count(WebhookDelivery.id)).where(
-        WebhookDelivery.webhook_id == webhook_id
+        WebhookDelivery.webhook_id == webhook_id,
+        WebhookDelivery.tenant_id == tenant_id,
     )
     count_result = await db.execute(count_stmt)
     total = count_result.scalar() or 0
 
     stmt = (
         select(WebhookDelivery)
-        .where(WebhookDelivery.webhook_id == webhook_id)
+        .where(
+            WebhookDelivery.webhook_id == webhook_id,
+            WebhookDelivery.tenant_id == tenant_id,
+        )
         .order_by(WebhookDelivery.created_at.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)
