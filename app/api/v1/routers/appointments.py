@@ -1,7 +1,7 @@
 import socket
 import logging
 import math
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 from datetime import datetime, timedelta
@@ -14,6 +14,11 @@ from app.api.v1.dependencies import get_current_user
 from app.core.audit import audit_log
 from app.config import settings
 from app.models import AppointmentStatus
+from app.core.email import (
+    send_booking_confirmation,
+    send_cancellation_email,
+    send_confirmation_email,
+)
 
 logger = logging.getLogger("clinic.appointments")
 
@@ -45,6 +50,45 @@ class AppointmentCreate(BaseModel):
         return v
 
 
+class RecurringAppointmentCreate(BaseModel):
+    doctor_id: int
+    patient_id: int
+    start_time: str
+    duration_minutes: int = 30
+    recurrence: str
+    occurrences: int
+
+    @field_validator("start_time")
+    @classmethod
+    def validate_start_time(cls, v: str) -> str:
+        try:
+            datetime.fromisoformat(v.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            raise ValueError("start_time must be a valid ISO 8601 datetime string")
+        return v
+
+    @field_validator("duration_minutes")
+    @classmethod
+    def validate_duration(cls, v: int) -> int:
+        if v < 5 or v > 480:
+            raise ValueError("duration_minutes must be between 5 and 480 (8 hours)")
+        return v
+
+    @field_validator("recurrence")
+    @classmethod
+    def validate_recurrence(cls, v: str) -> str:
+        if v not in ("weekly", "biweekly", "monthly"):
+            raise ValueError("recurrence must be 'weekly', 'biweekly', or 'monthly'")
+        return v
+
+    @field_validator("occurrences")
+    @classmethod
+    def validate_occurrences(cls, v: int) -> int:
+        if v < 1 or v > 52:
+            raise ValueError("occurrences must be between 1 and 52")
+        return v
+
+
 class AppointmentDetail(BaseModel):
     id: int
     doctor_id: int
@@ -53,6 +97,7 @@ class AppointmentDetail(BaseModel):
     time_slot: str
     duration_minutes: int = 30
     status: str
+    notes: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -62,6 +107,10 @@ class BookingResponse(BaseModel):
     node_id: str
     error: str | None = None
     appointment: AppointmentDetail | None = None
+
+
+class NotesUpdate(BaseModel):
+    notes: str
 
 
 @router.get("")
@@ -101,6 +150,7 @@ async def list_appointments(
                 "time_slot": appt.appointment_time.isoformat(),
                 "duration_minutes": appt.duration_minutes,
                 "status": appt.status.value,
+                "notes": appt.notes,
             }
         )
     pages = math.ceil(total / page_size) if total > 0 else 0
@@ -116,6 +166,7 @@ async def list_appointments(
 @router.post("")
 async def create_appointment(
     appt: AppointmentCreate,
+    background_tasks: BackgroundTasks,
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -239,7 +290,110 @@ async def create_appointment(
             status=new_appt.status.value,
         ),
     )
+    appt_detail = {
+        "doctor_id": new_appt.doctor_id,
+        "time_slot": new_appt.appointment_time.isoformat(),
+        "duration_minutes": new_appt.duration_minutes,
+        "status": new_appt.status.value,
+    }
+    background_tasks.add_task(send_booking_confirmation, patient.email, appt_detail)
     return JSONResponse(status_code=201, content=booking.model_dump())
+
+
+@router.post("/recurring")
+async def create_recurring_appointment(
+    req: RecurringAppointmentCreate,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    naive_time = _parse_time_slot(req.start_time)
+
+    doctor_repo = DoctorRepository(db)
+    doctor = await doctor_repo.get_by_id(req.doctor_id)
+    if not doctor or not doctor.is_active:
+        raise HTTPException(status_code=400, detail="Doctor not found or inactive")
+
+    patient_repo = PatientRepository(db)
+    patient = await patient_repo.get_by_id(req.patient_id)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+
+    appt_repo = AppointmentRepository(db)
+    try:
+        series, created, conflicts = await appt_repo.create_recurring_series(
+            doctor_id=req.doctor_id,
+            patient_id=req.patient_id,
+            start_time=naive_time,
+            duration_minutes=req.duration_minutes,
+            recurrence=req.recurrence,
+            occurrences=req.occurrences,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    created_list = []
+    for appt in created:
+        created_list.append(
+            {
+                "id": appt.id,
+                "doctor_id": appt.doctor_id,
+                "patient_id": appt.patient_id,
+                "time_slot": appt.appointment_time.isoformat(),
+                "duration_minutes": appt.duration_minutes,
+                "status": appt.status.value,
+            }
+        )
+
+    await audit_log(
+        db,
+        actor=current_user["user_id"],
+        action="create_recurring_appointment",
+        entity_type="recurring_series",
+        entity_id=series.id,
+        details={
+            "doctor_id": req.doctor_id,
+            "patient_id": req.patient_id,
+            "recurrence": req.recurrence,
+            "occurrences": req.occurrences,
+            "created": len(created),
+            "conflicts": len(conflicts),
+        },
+    )
+
+    return {
+        "series_id": series.id,
+        "recurrence": series.recurrence,
+        "created": created_list,
+        "conflicts": conflicts,
+        "total_requested": req.occurrences,
+        "total_created": len(created),
+        "total_conflicts": len(conflicts),
+    }
+
+
+@router.delete("/series/{series_id}")
+async def cancel_recurring_series(
+    series_id: int,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    role = current_user.get("role", "patient")
+    if role not in ("admin", "patient"):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+
+    appt_repo = AppointmentRepository(db)
+    count = await appt_repo.cancel_series(series_id)
+
+    await audit_log(
+        db,
+        actor=current_user["user_id"],
+        action="cancel_recurring_series",
+        entity_type="recurring_series",
+        entity_id=series_id,
+        details={"cancelled_count": count},
+    )
+
+    return {"series_id": series_id, "cancelled_count": count}
 
 
 @router.get("/available")
@@ -250,10 +404,6 @@ async def get_available_slots(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get available time slots for a doctor on a given date.
-
-    Returns 30-minute slots from 08:00 to 17:00 that are not booked.
-    """
     try:
         target_date = datetime.fromisoformat(date.replace("Z", "+00:00")).replace(
             tzinfo=None
@@ -268,6 +418,26 @@ async def get_available_slots(
             status_code=422, detail="duration_minutes must be between 5 and 480"
         )
 
+    doctor_repo = DoctorRepository(db)
+    schedule = await doctor_repo.get_schedule_for_date(doctor_id, target_date)
+
+    if schedule:
+        slot_start = target_date.replace(
+            hour=schedule.start_time.hour,
+            minute=schedule.start_time.minute,
+            second=0,
+            microsecond=0,
+        )
+        slot_end = target_date.replace(
+            hour=schedule.end_time.hour,
+            minute=schedule.end_time.minute,
+            second=0,
+            microsecond=0,
+        )
+    else:
+        slot_start = target_date.replace(hour=8, minute=0, second=0, microsecond=0)
+        slot_end = target_date.replace(hour=17, minute=0, second=0, microsecond=0)
+
     repo = AppointmentRepository(db)
     booked = await repo.get_booked_slots(doctor_id, target_date)
 
@@ -278,8 +448,6 @@ async def get_available_slots(
         booked_ranges.append((start, end))
 
     available = []
-    slot_start = target_date.replace(hour=8, minute=0, second=0, microsecond=0)
-    slot_end = target_date.replace(hour=17, minute=0, second=0, microsecond=0)
     delta = timedelta(minutes=30)
 
     current = slot_start
@@ -297,6 +465,7 @@ async def get_available_slots(
         "doctor_id": doctor_id,
         "date": target_date.date().isoformat(),
         "duration_minutes": duration_minutes,
+        "schedule_based": schedule is not None,
         "available_slots": available,
     }
 
@@ -309,6 +478,7 @@ class StatusUpdate(BaseModel):
 async def update_appointment_status(
     appointment_id: int,
     req: StatusUpdate,
+    background_tasks: BackgroundTasks,
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -372,6 +542,17 @@ async def update_appointment_status(
     patient_repo = PatientRepository(db)
     patient = await patient_repo.get_by_id(appt.patient_id)
 
+    appt_detail = {
+        "doctor_id": updated.doctor_id,
+        "time_slot": updated.appointment_time.isoformat(),
+        "duration_minutes": updated.duration_minutes,
+        "status": updated.status.value,
+    }
+    if new_status == AppointmentStatus.CANCELLED and patient:
+        background_tasks.add_task(send_cancellation_email, patient.email, appt_detail)
+    elif new_status == AppointmentStatus.CONFIRMED and patient:
+        background_tasks.add_task(send_confirmation_email, patient.email, appt_detail)
+
     return {
         "id": updated.id,
         "doctor_id": updated.doctor_id,
@@ -380,6 +561,48 @@ async def update_appointment_status(
         "time_slot": updated.appointment_time.isoformat(),
         "duration_minutes": updated.duration_minutes,
         "status": updated.status.value,
+    }
+
+
+@router.patch("/{appointment_id}/notes")
+async def update_appointment_notes(
+    appointment_id: int,
+    req: NotesUpdate,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    role = current_user.get("role", "patient")
+    if role not in ("doctor", "admin"):
+        raise HTTPException(
+            status_code=403, detail="Only doctors and admins can update notes"
+        )
+
+    appt_repo = AppointmentRepository(db)
+    updated = await appt_repo.update_notes(appointment_id, req.notes)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+
+    await audit_log(
+        db,
+        actor=current_user["user_id"],
+        action="update_appointment_notes",
+        entity_type="appointment",
+        entity_id=appointment_id,
+        details={"notes_length": len(req.notes)},
+    )
+
+    patient_repo = PatientRepository(db)
+    patient = await patient_repo.get_by_id(updated.patient_id)
+
+    return {
+        "id": updated.id,
+        "doctor_id": updated.doctor_id,
+        "patient_id": updated.patient_id,
+        "patient_name": patient.name if patient else "Unknown",
+        "time_slot": updated.appointment_time.isoformat(),
+        "duration_minutes": updated.duration_minutes,
+        "status": updated.status.value,
+        "notes": updated.notes,
     }
 
 
@@ -405,6 +628,7 @@ async def get_appointment(
         "time_slot": appt.appointment_time.isoformat(),
         "duration_minutes": appt.duration_minutes,
         "status": appt.status.value,
+        "notes": appt.notes,
     }
 
 

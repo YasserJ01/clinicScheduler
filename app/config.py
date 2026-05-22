@@ -14,6 +14,11 @@ class Settings(BaseSettings):
     FRONTEND_URL: str = "*"
     ALEMBIC_ENABLED: bool = False
     CHAOS_ENABLED: bool = False
+    EMAIL_PROVIDER: str = "null"
+    SMTP_HOST: str = "localhost"
+    SMTP_PORT: int = 1025
+    SENDGRID_API_KEY: str = ""
+    FROM_EMAIL: str = "clinic@example.com"
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

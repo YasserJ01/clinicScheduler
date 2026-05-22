@@ -1,5 +1,15 @@
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, ForeignKey, Text
+from sqlalchemy import (
+    Column,
+    Integer,
+    String,
+    DateTime,
+    Boolean,
+    ForeignKey,
+    Text,
+    Time,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase, relationship
 from sqlalchemy.dialects.postgresql import ENUM
 import enum
@@ -46,6 +56,24 @@ class Doctor(Base):
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
     appointments = relationship("Appointment", back_populates="doctor")
+    schedules = relationship(
+        "DoctorSchedule", back_populates="doctor", cascade="all, delete-orphan"
+    )
+
+
+class DoctorSchedule(Base):
+    __tablename__ = "doctor_schedules"
+    __table_args__ = (UniqueConstraint("doctor_id", "day_of_week"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    doctor_id = Column(Integer, ForeignKey("doctors.id"), nullable=False, index=True)
+    day_of_week = Column(Integer, nullable=False)
+    start_time = Column(Time, nullable=False)
+    end_time = Column(Time, nullable=False)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    doctor = relationship("Doctor", back_populates="schedules")
 
 
 class Patient(Base):
@@ -86,10 +114,28 @@ class Appointment(Base):
         default=AppointmentStatus.SCHEDULED,
     )
     notes = Column(Text, nullable=True)
+    series_id = Column(
+        Integer, ForeignKey("recurring_series.id"), nullable=True, index=True
+    )
+    next_reminder_at = Column(DateTime, nullable=True)
+    reminder_sent = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
     doctor = relationship("Doctor", back_populates="appointments")
     patient = relationship("Patient", back_populates="appointments")
+    series = relationship("RecurringSeries", back_populates="appointments")
+
+
+class RecurringSeries(Base):
+    __tablename__ = "recurring_series"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    doctor_id = Column(Integer, ForeignKey("doctors.id"), nullable=False)
+    patient_id = Column(Integer, ForeignKey("patients.id"), nullable=False)
+    recurrence = Column(String(20), nullable=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    appointments = relationship("Appointment", back_populates="series")
 
 
 class AuditLog(Base):

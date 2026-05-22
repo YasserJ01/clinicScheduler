@@ -1,7 +1,16 @@
 from typing import Sequence
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.models import Doctor, Patient, Appointment, User, UserRole, AppointmentStatus
+from app.models import (
+    Doctor,
+    Patient,
+    Appointment,
+    User,
+    UserRole,
+    AppointmentStatus,
+    DoctorSchedule,
+    RecurringSeries,
+)
 from app.core.security import get_password_hash
 from datetime import datetime, timedelta
 
@@ -77,6 +86,86 @@ class DoctorRepository:
                 setattr(doctor, field, value)
         await self.session.flush()
         return doctor
+
+    async def get_schedule(self, doctor_id: int) -> Sequence[DoctorSchedule]:
+        result = await self.session.execute(
+            select(DoctorSchedule)
+            .where(
+                DoctorSchedule.doctor_id == doctor_id,
+                DoctorSchedule.is_active.is_(True),
+            )
+            .order_by(DoctorSchedule.day_of_week)
+        )
+        return result.scalars().all()
+
+    async def set_schedule(
+        self, doctor_id: int, schedules: list[dict]
+    ) -> Sequence[DoctorSchedule]:
+        result = await self.session.execute(
+            select(DoctorSchedule).where(DoctorSchedule.doctor_id == doctor_id)
+        )
+        existing = result.scalars().all()
+        for s in existing:
+            await self.session.delete(s)
+        await self.session.flush()
+        new_schedules = []
+        for s in schedules:
+            ns = DoctorSchedule(
+                doctor_id=doctor_id,
+                day_of_week=s["day_of_week"],
+                start_time=s["start_time"],
+                end_time=s["end_time"],
+                is_active=s.get("is_active", True),
+            )
+            self.session.add(ns)
+            new_schedules.append(ns)
+        await self.session.flush()
+        return new_schedules
+
+    async def update_schedule_day(
+        self, doctor_id: int, day_of_week: int, **fields
+    ) -> DoctorSchedule | None:
+        result = await self.session.execute(
+            select(DoctorSchedule).where(
+                DoctorSchedule.doctor_id == doctor_id,
+                DoctorSchedule.day_of_week == day_of_week,
+            )
+        )
+        schedule = result.scalar_one_or_none()
+        if not schedule:
+            return None
+        for field, value in fields.items():
+            if value is not None and hasattr(schedule, field):
+                setattr(schedule, field, value)
+        await self.session.flush()
+        return schedule
+
+    async def delete_schedule_day(self, doctor_id: int, day_of_week: int) -> bool:
+        result = await self.session.execute(
+            select(DoctorSchedule).where(
+                DoctorSchedule.doctor_id == doctor_id,
+                DoctorSchedule.day_of_week == day_of_week,
+            )
+        )
+        schedule = result.scalar_one_or_none()
+        if not schedule:
+            return False
+        await self.session.delete(schedule)
+        await self.session.flush()
+        return True
+
+    async def get_schedule_for_date(
+        self, doctor_id: int, date: datetime
+    ) -> DoctorSchedule | None:
+        day_of_week = date.weekday()
+        result = await self.session.execute(
+            select(DoctorSchedule).where(
+                DoctorSchedule.doctor_id == doctor_id,
+                DoctorSchedule.day_of_week == day_of_week,
+                DoctorSchedule.is_active.is_(True),
+            )
+        )
+        return result.scalar_one_or_none()
 
 
 class PatientRepository:
@@ -268,3 +357,123 @@ class AppointmentRepository:
                 return appt
 
         return None
+
+    async def update_status(
+        self, appointment_id: int, new_status: AppointmentStatus
+    ) -> Appointment | None:
+        appt = await self.get_by_id(appointment_id)
+        if not appt:
+            return None
+        current_status = appt.status.value
+        allowed = self.VALID_TRANSITIONS.get(current_status, [])
+        if new_status.value not in allowed:
+            raise ValueError(
+                f"Cannot transition from '{current_status}' to '{new_status.value}'"
+            )
+        appt.status = new_status
+        await self.session.flush()
+        return appt
+
+    async def update_notes(self, appointment_id: int, notes: str) -> Appointment | None:
+        appt = await self.get_by_id(appointment_id)
+        if not appt:
+            return None
+        appt.notes = notes
+        await self.session.flush()
+        return appt
+
+    async def create_recurring_series(
+        self,
+        doctor_id: int,
+        patient_id: int,
+        start_time: datetime,
+        duration_minutes: int,
+        recurrence: str,
+        occurrences: int,
+    ) -> tuple[RecurringSeries, list[Appointment], list[dict]]:
+        series = RecurringSeries(
+            doctor_id=doctor_id,
+            patient_id=patient_id,
+            recurrence=recurrence,
+        )
+        self.session.add(series)
+        await self.session.flush()
+
+        created = []
+        conflicts = []
+        current = start_time.replace(tzinfo=None)
+
+        for i in range(occurrences):
+            conflict = await self.check_conflict(doctor_id, current, duration_minutes)
+            if conflict:
+                conflicts.append(
+                    {
+                        "time_slot": current.isoformat(),
+                        "reason": "Slot already occupied",
+                    }
+                )
+            else:
+                appt = Appointment(
+                    doctor_id=doctor_id,
+                    patient_id=patient_id,
+                    appointment_time=current,
+                    duration_minutes=duration_minutes,
+                    status=AppointmentStatus.SCHEDULED,
+                    series_id=series.id,
+                )
+                self.session.add(appt)
+                created.append(appt)
+
+            if recurrence == "weekly":
+                current += timedelta(weeks=1)
+            elif recurrence == "biweekly":
+                current += timedelta(weeks=2)
+            elif recurrence == "monthly":
+                month = current.month + 1
+                year = current.year
+                if month > 12:
+                    month = 1
+                    year += 1
+                day = min(current.day, 28)
+                current = current.replace(year=year, month=month, day=day)
+            else:
+                raise ValueError(f"Invalid recurrence: {recurrence}")
+
+        await self.session.flush()
+        return series, created, conflicts
+
+    async def cancel_series(self, series_id: int) -> int:
+        result = await self.session.execute(
+            select(Appointment).where(
+                Appointment.series_id == series_id,
+                Appointment.status.in_(["scheduled", "confirmed"]),
+            )
+        )
+        appointments = result.scalars().all()
+        count = 0
+        for appt in appointments:
+            appt.status = AppointmentStatus.CANCELLED
+            count += 1
+        await self.session.flush()
+        return count
+
+    async def get_due_reminders(self) -> Sequence[Appointment]:
+        now = datetime.utcnow()
+        result = await self.session.execute(
+            select(Appointment).where(
+                Appointment.appointment_time <= now + timedelta(hours=24),
+                Appointment.appointment_time > now,
+                Appointment.status.in_(["scheduled", "confirmed"]),
+                Appointment.reminder_sent.is_(False),
+            )
+        )
+        return result.scalars().all()
+
+    async def mark_reminder_sent(self, appointment_id: int) -> None:
+        result = await self.session.execute(
+            select(Appointment).where(Appointment.id == appointment_id)
+        )
+        appt = result.scalar_one_or_none()
+        if appt:
+            appt.reminder_sent = True
+            await self.session.flush()

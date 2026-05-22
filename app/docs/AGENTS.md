@@ -308,6 +308,50 @@ docker compose down -v                # Tear down everything including DB volume
 - Docker Compose backup: `docker compose exec db pg_dump -U clinic clinic_db > backup.sql`
 - Kubernetes backup: `kubectl apply -f k8s/cronjob-backup.yaml`
 
+### Doctor Availability Windows (Phase 10)
+- `DoctorSchedule` model: `doctor_schedules` table with `day_of_week` (0=Monday), `start_time`, `end_time`
+- `GET /doctors/{id}/schedule` — list schedule windows
+- `PUT /doctors/{id}/schedule` — replace entire schedule (admin only)
+- `PATCH /doctors/{id}/schedule/{day}` — update single day (admin only)
+- `DELETE /doctors/{id}/schedule/{day}` — remove a day (admin only)
+- `GET /appointments/available` now uses doctor schedule if set, falls back to 08:00-17:00 default
+- Response includes `schedule_based: true/false` to indicate which mode was used
+
+### Email Notifications (Phase 10)
+- `app/core/email.py` — abstract `EmailService` with `NullEmailService` (default), `SMTPEmailService`, `SendGridEmailService`
+- Config: `EMAIL_PROVIDER` ("null"/"smtp"/"sendgrid"), `SMTP_HOST`, `SMTP_PORT`, `SENDGRID_API_KEY`, `FROM_EMAIL`
+- Triggers: booking confirmation, cancellation, doctor confirmation
+- Uses FastAPI `BackgroundTasks` for non-blocking delivery
+
+### Appointment Notes (Phase 10)
+- `PATCH /appointments/{id}/notes` with body `{"notes": "..."}`
+- RBAC: doctor or admin only (patients get 403)
+- Audit-logged on every change
+
+### Recurring Appointments (Phase 10)
+- `RecurringSeries` model links individual appointments to a series
+- `POST /appointments/recurring` — creates N appointments with weekly/biweekly/monthly recurrence
+- `DELETE /appointments/series/{series_id}` — cancels all remaining appointments in series
+- Conflicts reported per occurrence; returns `{"created": [...], "conflicts": [...]}`
+- Alembic migration `007` adds `series_id`, `next_reminder_at`, `reminder_sent` columns
+
+### API Versioning (Phase 10)
+- `app/api/v2/` package with updated routers
+- v2 appointments: paginated response by default, includes `series_id`
+- v2 doctors: list response includes `schedule` array
+- `DeprecationMiddleware` adds `Deprecation`, `Sunset`, `Link` headers to all v1 responses
+- Policy document: `app/docs/API_Versioning_Policy.md`
+
+### NGINX Dynamic Resolution (Phase 10)
+- `resolver 127.0.0.11 valid=5s` for Docker DNS
+- `set $backend http://worker:8000` + `proxy_pass $backend` for dynamic upstream resolution
+- Compatible with worker restarts and scaling
+
+### Enhanced Load Testing (Phase 10)
+- Mixed scenario: 70% reads, 20% bookings, 10% status updates
+- Setup fails fast if auth or patient creation fails
+- `bookings_per_second` custom metric with threshold
+
 ## Dev Commands
 
 ```bash

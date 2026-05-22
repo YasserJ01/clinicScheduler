@@ -8,6 +8,7 @@ from app.config import settings
 from app.core.middleware import MessagePackMiddleware
 from app.core.metrics_middleware import MetricsMiddleware
 from app.core.request_id_middleware import RequestIDMiddleware
+from app.core.deprecation_middleware import DeprecationMiddleware
 from app.core.exceptions import register_exception_handlers
 from app.api.v1.routers import (
     auth,
@@ -18,6 +19,7 @@ from app.api.v1.routers import (
     admin,
     metrics,
 )
+from app.api.v2.routers import appointments as appointments_v2, doctors as doctors_v2
 from app.db.session import init_db, async_session_factory, engine
 
 logging.basicConfig(level=logging.INFO)
@@ -70,6 +72,7 @@ def create_app() -> FastAPI:
     app.add_middleware(MessagePackMiddleware)
     app.add_middleware(MetricsMiddleware)
     app.add_middleware(RequestIDMiddleware)
+    app.add_middleware(DeprecationMiddleware)
 
     register_exception_handlers(app)
 
@@ -80,6 +83,9 @@ def create_app() -> FastAPI:
     app.include_router(appointments.router, prefix="/api/v1")
     app.include_router(admin.router, prefix="/api/v1")
     app.include_router(metrics.router, prefix="/api/v1")
+
+    app.include_router(appointments_v2.router, prefix="/api/v2")
+    app.include_router(doctors_v2.router, prefix="/api/v2")
 
     return app
 

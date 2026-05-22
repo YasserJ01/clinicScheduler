@@ -1,4 +1,5 @@
 import math
+from datetime import time as dt_time
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,6 +40,24 @@ class DoctorProfileResponse(BaseModel):
     upcoming_appointments: int = 0
 
     model_config = {"from_attributes": True}
+
+
+class ScheduleEntry(BaseModel):
+    day_of_week: int
+    start_time: str
+    end_time: str
+    is_active: bool = True
+
+
+class ScheduleDayUpdate(BaseModel):
+    start_time: str | None = None
+    end_time: str | None = None
+    is_active: bool | None = None
+
+
+def _parse_time(t: str) -> dt_time:
+    parts = t.split(":")
+    return dt_time(hour=int(parts[0]), minute=int(parts[1]))
 
 
 @router.get("")
@@ -138,3 +157,172 @@ async def update_doctor(
         "specialty": updated.specialty,
         "is_active": updated.is_active,
     }
+
+
+@router.get("/{doctor_id}/schedule")
+async def get_doctor_schedule(
+    doctor_id: int,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    repo = DoctorRepository(db)
+    doctor = await repo.get_by_id(doctor_id)
+    if not doctor:
+        raise HTTPException(status_code=404, detail="Doctor not found")
+
+    schedules = await repo.get_schedule(doctor_id)
+    return [
+        {
+            "id": s.id,
+            "doctor_id": s.doctor_id,
+            "day_of_week": s.day_of_week,
+            "start_time": s.start_time.isoformat(),
+            "end_time": s.end_time.isoformat(),
+            "is_active": s.is_active,
+        }
+        for s in schedules
+    ]
+
+
+@router.put("/{doctor_id}/schedule")
+async def set_doctor_schedule(
+    doctor_id: int,
+    schedules: list[ScheduleEntry],
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    role = current_user.get("role", "patient")
+    if role not in ("admin", "doctor"):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+
+    repo = DoctorRepository(db)
+    doctor = await repo.get_by_id(doctor_id)
+    if not doctor:
+        raise HTTPException(status_code=404, detail="Doctor not found")
+
+    if role == "doctor":
+        raise HTTPException(status_code=403, detail="Only admins can set schedules")
+
+    schedule_data = [
+        {
+            "day_of_week": s.day_of_week,
+            "start_time": _parse_time(s.start_time),
+            "end_time": _parse_time(s.end_time),
+            "is_active": s.is_active,
+        }
+        for s in schedules
+    ]
+
+    result = await repo.set_schedule(doctor_id, schedule_data)
+    await audit_log(
+        db,
+        actor=current_user["user_id"],
+        action="set_doctor_schedule",
+        entity_type="doctor_schedule",
+        entity_id=doctor_id,
+        details={"days_count": len(result)},
+    )
+
+    return [
+        {
+            "id": s.id,
+            "doctor_id": s.doctor_id,
+            "day_of_week": s.day_of_week,
+            "start_time": s.start_time.isoformat(),
+            "end_time": s.end_time.isoformat(),
+            "is_active": s.is_active,
+        }
+        for s in result
+    ]
+
+
+@router.patch("/{doctor_id}/schedule/{day_of_week}")
+async def update_schedule_day(
+    doctor_id: int,
+    day_of_week: int,
+    req: ScheduleDayUpdate,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    if day_of_week < 0 or day_of_week > 6:
+        raise HTTPException(
+            status_code=422, detail="day_of_week must be 0-6 (Monday-Sunday)"
+        )
+
+    repo = DoctorRepository(db)
+    doctor = await repo.get_by_id(doctor_id)
+    if not doctor:
+        raise HTTPException(status_code=404, detail="Doctor not found")
+
+    fields = {}
+    if req.start_time is not None:
+        fields["start_time"] = _parse_time(req.start_time)
+    if req.end_time is not None:
+        fields["end_time"] = _parse_time(req.end_time)
+    if req.is_active is not None:
+        fields["is_active"] = req.is_active
+
+    updated = await repo.update_schedule_day(doctor_id, day_of_week, **fields)
+    if not updated:
+        raise HTTPException(
+            status_code=404, detail="Schedule entry not found for this day"
+        )
+
+    await audit_log(
+        db,
+        actor=current_user["user_id"],
+        action="update_schedule_day",
+        entity_type="doctor_schedule",
+        entity_id=doctor_id,
+        details={"day_of_week": day_of_week},
+    )
+
+    return {
+        "id": updated.id,
+        "doctor_id": updated.doctor_id,
+        "day_of_week": updated.day_of_week,
+        "start_time": updated.start_time.isoformat(),
+        "end_time": updated.end_time.isoformat(),
+        "is_active": updated.is_active,
+    }
+
+
+@router.delete("/{doctor_id}/schedule/{day_of_week}")
+async def delete_schedule_day(
+    doctor_id: int,
+    day_of_week: int,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    if day_of_week < 0 or day_of_week > 6:
+        raise HTTPException(
+            status_code=422, detail="day_of_week must be 0-6 (Monday-Sunday)"
+        )
+
+    repo = DoctorRepository(db)
+    doctor = await repo.get_by_id(doctor_id)
+    if not doctor:
+        raise HTTPException(status_code=404, detail="Doctor not found")
+
+    deleted = await repo.delete_schedule_day(doctor_id, day_of_week)
+    if not deleted:
+        raise HTTPException(
+            status_code=404, detail="Schedule entry not found for this day"
+        )
+
+    await audit_log(
+        db,
+        actor=current_user["user_id"],
+        action="delete_schedule_day",
+        entity_type="doctor_schedule",
+        entity_id=doctor_id,
+        details={"day_of_week": day_of_week},
+    )
+
+    return {"deleted": True, "doctor_id": doctor_id, "day_of_week": day_of_week}
