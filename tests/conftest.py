@@ -1,9 +1,10 @@
 import pytest
 import httpx
 import asyncio
+import os
 from datetime import datetime, timedelta, timezone
 
-BASE_URL = "http://localhost"
+BASE_URL = os.getenv("BASE_URL", "http://localhost")
 
 
 @pytest.fixture(scope="session")

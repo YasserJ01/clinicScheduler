@@ -32,7 +32,12 @@ docker compose down -v                # Tear down everything including DB volume
 | `app/core/metrics_middleware.py` | HTTP request tracking middleware (async). |
 | `app/core/request_id_middleware.py` | X-Request-ID correlation header middleware. |
 | `app/core/audit.py` | Audit logging helper (DB + stdout). |
-| `nginx/nginx.conf` | NGINX config: consistent hashing, rate limiting (500r/s), retry on 502/503. |
+| `app/core/tenant_middleware.py` | X-Tenant-ID header extraction for multi-tenant support. |
+| `app/core/telemetry.py` | OpenTelemetry configuration (Jaeger exporter). |
+| `app/core/webhooks.py` | Webhook delivery with HMAC-SHA256 signing and retry logic. |
+| `app/core/email.py` | Email service abstraction (Null/SMTP/SendGrid). |
+| `app/core/deprecation_middleware.py` | Deprecation headers for v1 API endpoints. |
+| `nginx/nginx.conf` | NGINX config: consistent hashing, rate limiting (500r/s), retry on 502/503, SPA serving. |
 | `loadtest/scheduler.js` | k6 load test: 30s ramp to 50 VUs, 1m at 200 VUs, 30s ramp down. |
 | `tests/unit/test_security.py` | 15 unit tests: password hashing, JWT creation/validation, `alg: none` attack. |
 | `tests/integration/test_auth.py` | 10 integration tests: register, login, JWT validation. |
@@ -352,6 +357,54 @@ docker compose down -v                # Tear down everything including DB volume
 - Setup fails fast if auth or patient creation fails
 - `bookings_per_second` custom metric with threshold
 
+### Analytics Dashboard (Phase 11)
+- `GET /api/v1/admin/analytics/summary` — aggregate stats with optional date range
+- `GET /api/v1/admin/analytics/doctors/{id}/utilisation` — doctor utilisation rate
+- `GET /api/v1/admin/analytics/peak-hours` — booking histogram by hour
+- `GET /api/v1/admin/analytics/patients/{id}/history` — patient appointment history
+- `GET /api/v1/admin/analytics/audit-log` — paginated, filterable audit log
+- All endpoints require `admin` role
+
+### Webhook Notifications (Phase 11)
+- `Webhook` and `WebhookDelivery` models with HMAC-SHA256 signing
+- `POST/GET/PATCH/DELETE /api/v1/admin/webhooks` — CRUD for webhook subscriptions
+- `GET /api/v1/admin/webhooks/{id}/deliveries` — delivery history
+- Retry policy: exponential backoff `[1, 5, 25]` seconds, max 3 retries
+- Delivery headers: `X-Webhook-Signature`, `X-Webhook-Event`
+- All webhook endpoints require `admin` role
+
+### Patient Self-Service Portal (Phase 11)
+- `frontend/index.html` — single-file SPA served by NGINX
+- Features: login/register, view/cancel appointments, book new, browse doctors
+- NGINX `location /` with `try_files $uri $uri/ /index.html`
+
+### Doctor Mobile API (Phase 11)
+- `GET /api/v1/doctors/{id}/appointments/today` — today's appointments
+- `GET /api/v1/doctors/{id}/appointments/upcoming?days=7` — upcoming appointments
+- `GET /api/v1/doctors/{id}/patients` — all patients the doctor has seen
+- RBAC: doctor (own data only) or admin (any doctor)
+
+### OpenTelemetry (Phase 11)
+- `app/core/telemetry.py` — Jaeger exporter, FastAPI + SQLAlchemy instrumentation
+- `jaeger` service in docker-compose (UI on `:16686`)
+- Activate: `ENABLE_TELEMETRY=true docker compose up -d`
+
+### CI/CD Pipeline Fix (Phase 11/12)
+- `FATAL: role "root" does not exist` fixed by removing `docker compose` from CI
+- CI now starts uvicorn directly: `nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 &`
+- `BASE_URL` environment variable support in `tests/conftest.py`
+
+### Multi-Tenant Support (Phase 12)
+- `Tenant` model: `id`, `name`, `slug`, `is_active`
+- `tenant_id` column on ALL domain models (users, doctors, patients, appointments, etc.)
+- `TenantMiddleware` extracts `X-Tenant-ID` header → `request.state.tenant_id`
+- JWT tokens include `tenant_id` claim (set during register/login/refresh)
+- `get_current_tenant` dependency validates header matches token tenant_id
+- All repository methods accept `tenant_id` parameter for query filtering
+- Tenant-scoped unique constraints: `(tenant_id, username)`, `(tenant_id, email)`
+- Default tenant: `id=1, slug="default"` — all existing data backfilled
+- **Security**: Tenant mismatch returns HTTP 403; all queries filtered by tenant_id
+
 ## Dev Commands
 
 ```bash
@@ -487,4 +540,35 @@ docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d
 
 # Apply all Alembic migrations (including 005_refresh_tokens)
 alembic upgrade head
+
+# Run Phase 10 tests
+python -m pytest tests/integration/test_phase10.py -v
+
+# Run Phase 11 tests
+python -m pytest tests/integration/test_phase11.py -v
+
+# Run analytics endpoints (requires admin token)
+curl -s -H "Authorization: Bearer <admin_token>" http://localhost/api/v1/admin/analytics/summary
+curl -s -H "Authorization: Bearer <admin_token>" http://localhost/api/v1/admin/analytics/peak-hours
+
+# Manage webhooks (requires admin token)
+curl -s -X POST -H "Authorization: Bearer <admin_token>" -H "Content-Type: application/json" -d '{"url":"https://example.com/hook","events":["appointment.created"]}' http://localhost/api/v1/admin/webhooks
+curl -s -H "Authorization: Bearer <admin_token>" http://localhost/api/v1/admin/webhooks
+curl -s -H "Authorization: Bearer <admin_token>" http://localhost/api/v1/admin/webhooks/1/deliveries
+
+# Access patient portal
+open http://localhost
+
+# Access Jaeger UI (when ENABLE_TELEMETRY=true)
+open http://localhost:16686
+
+# Multi-tenant: register with specific tenant
+curl -s -X POST -H "Content-Type: application/json" -d '{"username":"user1","password":"test1234","tenant_id":2}' http://localhost/api/v1/auth/register
+
+# Multi-tenant: set X-Tenant-ID header
+curl -s -H "Authorization: Bearer <token>" -H "X-Tenant-ID: 2" http://localhost/api/v1/doctors
+
+# View tenant data
+docker compose exec db psql -U clinic -d clinic_db -c "SELECT id, name, slug FROM tenants;"
+docker compose exec db psql -U clinic -d clinic_db -c "SELECT tenant_id, COUNT(*) FROM users GROUP BY tenant_id;"
 ```

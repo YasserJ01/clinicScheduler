@@ -48,6 +48,13 @@ jobs:
   test:
     needs: [lint, security, nginx-config]
     runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql+asyncpg://clinic:clinicpass@localhost:5432/clinic_db
+      REDIS_URL: redis://:redispass@localhost:6379/0
+      SECRET_KEY: ci-test-secret-key
+      CHAOS_ENABLED: "true"
+      FRONTEND_URL: "*"
+      BASE_URL: http://localhost:8000
     services:
       postgres:
         image: postgres:16-alpine
@@ -58,16 +65,20 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd pg_isready
+          --health-cmd "pg_isready -U clinic"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
       redis:
         image: redis:7-alpine
+        command: >-
+          redis-server
+          --requirepass redispass
+          --appendonly yes
         ports:
           - 6379:6379
         options: >-
-          --health-cmd "redis-cli ping"
+          --health-cmd "redis-cli -a redispass ping"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
@@ -80,19 +91,16 @@ jobs:
         run: pip install -r requirements.txt
       - name: Run unit tests
         run: python -m pytest tests/unit/ -v
-      - name: Build Docker images
-        run: docker compose build
-      - name: Start services
-        run: docker compose up -d
-      - name: Wait for services to be healthy
+      - name: Start API server
         run: |
+          nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 &
           for i in {1..30}; do
-            if curl -f http://localhost/api/v1/health; then
-              echo "Services are healthy"
+            if curl -sf http://localhost:8000/api/v1/health > /dev/null; then
+              echo "API is ready"
               break
             fi
-            echo "Waiting for services... ($i)"
-            sleep 5
+            echo "Waiting for API... ($i)"
+            sleep 2
           done
       - name: Run integration tests
         run: python -m pytest tests/integration/ -v
