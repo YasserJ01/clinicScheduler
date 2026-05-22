@@ -30,15 +30,23 @@ logging.basicConfig(level=logging.INFO)
 
 async def seed_data():
     async with async_session_factory() as session:
+        from app.models import Doctor, Tenant
+
+        result = await session.execute(
+            text("SELECT COUNT(*) FROM tenants")
+        )
+        tenant_count = result.scalar()
+        if tenant_count == 0:
+            session.add(Tenant(name="Default Clinic", slug="default"))
+            await session.commit()
+
         result = await session.execute(text("SELECT COUNT(*) FROM doctors"))
         count = result.scalar()
         if count == 0:
-            from app.models import Doctor
-
             session.add_all(
                 [
-                    Doctor(name="Dr. Smith", specialty="Cardiology"),
-                    Doctor(name="Dr. Jones", specialty="Dermatology"),
+                    Doctor(name="Dr. Smith", specialty="Cardiology", tenant_id=1),
+                    Doctor(name="Dr. Jones", specialty="Dermatology", tenant_id=1),
                 ]
             )
             await session.commit()
