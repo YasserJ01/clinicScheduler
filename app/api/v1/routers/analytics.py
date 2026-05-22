@@ -29,9 +29,7 @@ async def get_analytics_summary(
     _require_admin(current_user)
     tenant_id = current_user.get("tenant_id")
 
-    where_clauses = []
-    if tenant_id is not None:
-        where_clauses.append(Appointment.tenant_id == tenant_id)
+    where_clauses = [Appointment.tenant_id == tenant_id]
     if from_date:
         from_dt = datetime.fromisoformat(from_date.replace("Z", "+00:00")).replace(
             tzinfo=None
@@ -49,9 +47,10 @@ async def get_analytics_summary(
     total_appts_result = await db.execute(total_appts_stmt)
     total_appointments = total_appts_result.scalar() or 0
 
-    cancelled_where = [Appointment.status == AppointmentStatus.CANCELLED]
-    if tenant_id is not None:
-        cancelled_where.append(Appointment.tenant_id == tenant_id)
+    cancelled_where = [
+        Appointment.status == AppointmentStatus.CANCELLED,
+        Appointment.tenant_id == tenant_id,
+    ]
     if from_date:
         cancelled_where.append(Appointment.appointment_time >= from_dt)
     if to_date:
@@ -64,9 +63,7 @@ async def get_analytics_summary(
         (cancelled_count / total_appointments * 100) if total_appointments > 0 else 0
     )
 
-    avg_duration_where = []
-    if tenant_id is not None:
-        avg_duration_where.append(Appointment.tenant_id == tenant_id)
+    avg_duration_where = [Appointment.tenant_id == tenant_id]
     if from_date:
         avg_duration_where.append(Appointment.appointment_time >= from_dt)
     if to_date:
@@ -77,18 +74,14 @@ async def get_analytics_summary(
     avg_duration_result = await db.execute(avg_duration_stmt)
     avg_duration = round(avg_duration_result.scalar() or 0, 1)
 
-    patient_where = []
-    if tenant_id is not None:
-        patient_where.append(Patient.tenant_id == tenant_id)
+    patient_where = [Patient.tenant_id == tenant_id]
     total_patients_stmt = select(func.count(Patient.id))
     if patient_where:
         total_patients_stmt = total_patients_stmt.where(*patient_where)
     total_patients_result = await db.execute(total_patients_stmt)
     total_patients = total_patients_result.scalar() or 0
 
-    doctor_where = []
-    if tenant_id is not None:
-        doctor_where.append(Doctor.tenant_id == tenant_id)
+    doctor_where = [Doctor.tenant_id == tenant_id]
     total_doctors_stmt = select(func.count(Doctor.id))
     if doctor_where:
         total_doctors_stmt = total_doctors_stmt.where(*doctor_where)
@@ -115,9 +108,10 @@ async def get_doctor_utilisation(
     db: AsyncSession = Depends(get_db),
 ):
     _require_admin(current_user)
+    tenant_id = current_user.get("tenant_id")
 
     doctor_repo = DoctorRepository(db)
-    doctor = await doctor_repo.get_by_id(doctor_id)
+    doctor = await doctor_repo.get_by_id(doctor_id, tenant_id=tenant_id)
     if not doctor:
         raise HTTPException(status_code=404, detail="Doctor not found")
 
@@ -138,6 +132,7 @@ async def get_doctor_utilisation(
 
     booked_stmt = select(func.count(Appointment.id)).where(
         Appointment.doctor_id == doctor_id,
+        Appointment.tenant_id == tenant_id,
         Appointment.appointment_time >= from_dt,
         Appointment.appointment_time <= to_dt,
         Appointment.status != AppointmentStatus.CANCELLED,
@@ -185,6 +180,7 @@ async def get_peak_hours(
     db: AsyncSession = Depends(get_db),
 ):
     _require_admin(current_user)
+    tenant_id = current_user.get("tenant_id")
 
     from_dt = datetime.utcnow() - timedelta(days=days)
 
@@ -193,11 +189,12 @@ async def get_peak_hours(
         SELECT EXTRACT(HOUR FROM appointment_time) AS hour, COUNT(*) AS bookings
         FROM appointments
         WHERE appointment_time >= :from_dt
+          AND tenant_id = :tenant_id
           AND status != 'cancelled'
         GROUP BY hour
         ORDER BY hour
         """),
-        {"from_dt": from_dt},
+        {"from_dt": from_dt, "tenant_id": tenant_id},
     )
     rows = result.fetchall()
 
@@ -219,15 +216,16 @@ async def get_patient_history(
     db: AsyncSession = Depends(get_db),
 ):
     _require_admin(current_user)
+    tenant_id = current_user.get("tenant_id")
 
     patient_repo = PatientRepository(db)
-    patient = await patient_repo.get_by_id(patient_id)
+    patient = await patient_repo.get_by_id(patient_id, tenant_id=tenant_id)
     if not patient:
         raise HTTPException(status_code=404, detail="Patient not found")
 
     appt_repo = AppointmentRepository(db)
     appointments, total = await appt_repo.list_paginated(
-        page=1, page_size=100, patient_id=patient_id
+        page=1, page_size=100, patient_id=patient_id, tenant_id=tenant_id
     )
 
     history = []
@@ -267,8 +265,9 @@ async def get_audit_log(
     db: AsyncSession = Depends(get_db),
 ):
     _require_admin(current_user)
+    tenant_id = current_user.get("tenant_id")
 
-    where_clauses = []
+    where_clauses = [AuditLog.tenant_id == tenant_id]
     if actor:
         where_clauses.append(AuditLog.actor.ilike(f"%{actor}%"))
     if action:
