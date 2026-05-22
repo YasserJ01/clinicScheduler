@@ -119,7 +119,10 @@ async def refresh_token(
         if u.refresh_token_hash and verify_refresh_token(
             req.refresh_token, u.refresh_token_hash
         ):
-            if u.refresh_token_expires_at and u.refresh_token_expires_at < datetime.utcnow():
+            if (
+                u.refresh_token_expires_at
+                and u.refresh_token_expires_at < datetime.utcnow()
+            ):
                 raise HTTPException(status_code=401, detail="Refresh token expired")
             matched_user = u
             break
