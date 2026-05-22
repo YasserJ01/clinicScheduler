@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     SENDGRID_API_KEY: str = ""
     FROM_EMAIL: str = "clinic@example.com"
 
+    POOL_SIZE: int = 15
+    MAX_OVERFLOW: int = 5
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
 

@@ -6,8 +6,8 @@ from app.models import Base
 
 engine = create_async_engine(
     settings.DATABASE_URL,
-    pool_size=15,
-    max_overflow=10,
+    pool_size=settings.POOL_SIZE,
+    max_overflow=settings.MAX_OVERFLOW,
     pool_timeout=10,
     pool_recycle=1800,
     echo=False,

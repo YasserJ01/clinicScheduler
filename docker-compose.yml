@@ -31,8 +31,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      pgbouncer:
-        condition: service_started
     networks:
       - clinic-net
     restart: unless-stopped

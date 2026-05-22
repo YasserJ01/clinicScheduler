@@ -6,7 +6,7 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
-from app.db.repository import UserRepository
+from app.db.repository import PatientRepository, UserRepository
 from app.models import User
 from app.api.v1.dependencies import get_current_user
 from app.core.security import (
@@ -25,6 +25,7 @@ class RegisterRequest(BaseModel):
     password: str
     role: str = "patient"
     tenant_id: int = 1
+    email: str | None = None
 
     @field_validator("password")
     @classmethod
@@ -84,6 +85,18 @@ async def register(
     user.refresh_token_sha256 = refresh_sha256
     user.refresh_token_expires_at = expires_at
     await db.flush()
+
+    if req.role == "patient":
+        patient_repo = PatientRepository(db)
+        patient_email = req.email or f"{req.username}@clinic.com"
+        await patient_repo.get_or_create_by_email(
+            name=req.username,
+            email=patient_email,
+            tenant_id=req.tenant_id,
+            user_id=user.id,
+        )
+        await db.flush()
+
     access_token = create_access_token(
         subject=user.username,
         expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),

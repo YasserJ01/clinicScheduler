@@ -6,6 +6,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 from datetime import datetime, timedelta
 from typing import Union
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 from app.db.session import get_db
@@ -13,7 +14,7 @@ from app.db.repository import AppointmentRepository, DoctorRepository, PatientRe
 from app.api.v1.dependencies import get_current_user
 from app.core.audit import audit_log
 from app.config import settings
-from app.models import AppointmentStatus
+from app.models import AppointmentStatus, Patient, User
 from app.core.email import (
     send_booking_confirmation,
     send_cancellation_email,
@@ -510,9 +511,17 @@ async def update_appointment_status(
             raise HTTPException(
                 status_code=403, detail="Patients can only cancel appointments"
             )
-        patient_repo = PatientRepository(db)
-        patient = await patient_repo.get_by_id(appt.patient_id, tenant_id=tenant_id)
-        if not patient or patient.email != f"{username}@clinic.com":
+        user_result = await db.execute(
+            select(User).where(User.username == username)
+        )
+        user = user_result.scalar_one_or_none()
+        if not user:
+            raise HTTPException(status_code=403, detail="User not found")
+        patient_result = await db.execute(
+            select(Patient).where(Patient.user_id == user.id)
+        )
+        patient = patient_result.scalar_one_or_none()
+        if not patient or patient.id != appt.patient_id:
             raise HTTPException(
                 status_code=403, detail="Cannot cancel another patient's appointment"
             )

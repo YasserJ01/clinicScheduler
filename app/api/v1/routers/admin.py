@@ -10,7 +10,7 @@ from app.db.session import get_db
 from app.db.repository import PatientRepository, AppointmentRepository
 from app.api.v1.dependencies import get_current_user
 from app.core.audit import audit_log
-from app.models import Webhook, WebhookDelivery
+from app.models import Doctor, User, UserRole, Webhook, WebhookDelivery
 
 logger = logging.getLogger("clinic.admin")
 
@@ -399,3 +399,55 @@ async def list_webhook_deliveries(
         "page_size": page_size,
         "pages": pages,
     }
+
+
+class LinkUserRequest(BaseModel):
+    user_id: int
+
+
+@router.patch("/doctors/{doctor_id}/link-user")
+async def link_doctor_user(
+    doctor_id: int,
+    req: LinkUserRequest,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    _require_admin(current_user)
+
+    result = await db.execute(select(Doctor).where(Doctor.id == doctor_id))
+    doctor = result.scalar_one_or_none()
+    if not doctor:
+        raise HTTPException(status_code=404, detail="Doctor not found")
+
+    user_result = await db.execute(
+        select(User).where(User.id == req.user_id)
+    )
+    user = user_result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user.role != UserRole.DOCTOR:
+        raise HTTPException(
+            status_code=400, detail="User must have doctor role"
+        )
+
+    existing = await db.execute(
+        select(Doctor).where(Doctor.user_id == req.user_id, Doctor.id != doctor_id)
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(
+            status_code=409, detail="User already linked to another doctor"
+        )
+
+    doctor.user_id = req.user_id
+    await db.flush()
+
+    await audit_log(
+        db,
+        actor=current_user["user_id"],
+        action="link_doctor_user",
+        entity_type="doctor",
+        entity_id=doctor_id,
+        details={"user_id": req.user_id},
+    )
+
+    return {"doctor_id": doctor_id, "user_id": req.user_id, "linked": True}
