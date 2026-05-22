@@ -14,6 +14,7 @@ async def audit_log(
     entity_id: int | None = None,
     details: dict | None = None,
     outcome: str = "success",
+    tenant_id: int | None = None,
 ) -> None:
     """Append a structured audit entry to the audit_log table and stdout."""
     details_json = json.dumps(details, default=str) if details else None
@@ -25,6 +26,7 @@ async def audit_log(
         entity_id=entity_id,
         details=details_json,
         outcome=outcome,
+        tenant_id=tenant_id,
     )
     session.add(entry)
 

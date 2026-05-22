@@ -42,6 +42,7 @@ async def deliver_webhook(
 
     delivery = WebhookDelivery(
         webhook_id=webhook.id,
+        tenant_id=webhook.tenant_id,
         event_type=event_type,
         payload=payload,
     )
