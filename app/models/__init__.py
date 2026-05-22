@@ -115,9 +115,7 @@ class Patient(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False)
-    user_id = Column(
-        Integer, ForeignKey("users.id"), nullable=True, unique=True, index=True
-    )
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     name = Column(String(200), nullable=False)
     email = Column(String(255), nullable=False, index=True)
     phone = Column(String(20), nullable=True)

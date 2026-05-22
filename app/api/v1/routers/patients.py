@@ -40,14 +40,24 @@ async def create_patient(
     db: AsyncSession = Depends(get_db),
 ):
     tenant_id = current_user.get("tenant_id", 1)
-    result = await db.execute(
-        select(User.id).where(User.username == current_user.get("user_id"))
-    )
-    user_pk = result.scalar_one_or_none()
+    username_from_email = req.email.split("@")[0] if "@" in req.email else None
+    user_pk = None
+    if username_from_email:
+        result = await db.execute(
+            select(User.id).where(User.username == username_from_email)
+        )
+        user_pk = result.scalar_one_or_none()
     repo = PatientRepository(db)
-    patient = await repo.get_or_create_by_email(
-        req.name, req.email, tenant_id=tenant_id, user_id=user_pk
-    )
+    try:
+        patient = await repo.get_or_create_by_email(
+            req.name, req.email, tenant_id=tenant_id, user_id=user_pk
+        )
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="A patient with this email already exists",
+        )
     return {"id": patient.id, "name": patient.name, "email": patient.email}
 
 
@@ -81,9 +91,8 @@ async def get_my_profile(
     db: AsyncSession = Depends(get_db),
 ):
     tenant_id = current_user.get("tenant_id", 1)
-    result = await db.execute(
-        select(User.id).where(User.username == current_user.get("user_id"))
-    )
+    username = current_user.get("user_id")
+    result = await db.execute(select(User.id).where(User.username == username))
     user_pk = result.scalar_one_or_none()
     if user_pk is None:
         raise HTTPException(status_code=404, detail="User not found")
@@ -93,9 +102,24 @@ async def get_my_profile(
             Patient.tenant_id == tenant_id,
         )
     )
-    patient = patient_result.scalar_one_or_none()
+    patient = patient_result.scalars().first()
     if not patient:
-        raise HTTPException(status_code=404, detail="Patient profile not found")
+        patient_result = await db.execute(
+            select(Patient).where(
+                Patient.email == f"{username}@clinic.com",
+                Patient.tenant_id == tenant_id,
+            )
+        )
+        patient = patient_result.scalar_one_or_none()
+    if not patient:
+        patient = Patient(
+            name=username,
+            email=f"{username}@clinic.com",
+            tenant_id=tenant_id,
+            user_id=user_pk,
+        )
+        db.add(patient)
+        await db.flush()
     return {"id": patient.id, "name": patient.name, "email": patient.email}
 
 
