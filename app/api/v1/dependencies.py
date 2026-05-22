@@ -1,3 +1,4 @@
+import hashlib
 import redis.asyncio as aioredis
 from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -7,6 +8,15 @@ from app.db.session import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
 
 security = HTTPBearer()
+
+_redis: aioredis.Redis | None = None
+
+
+async def _get_redis() -> aioredis.Redis:
+    global _redis
+    if _redis is None:
+        _redis = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+    return _redis
 
 
 async def get_current_user(
@@ -24,10 +34,11 @@ async def get_current_user(
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token"
             )
-        redis = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
-        jti = user_id + ":" + credentials.credentials[:8]
+        redis = await _get_redis()
+        jti = hashlib.sha256(
+            f"{user_id}:{credentials.credentials}".encode()
+        ).hexdigest()
         denied = await redis.get(f"token_denylist:{jti}")
-        await redis.aclose()
         if denied:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED, detail="Token revoked"

@@ -61,6 +61,7 @@ class User(Base):
     )
     refresh_token_hash = Column(String(255), nullable=True)
     refresh_token_expires_at = Column(DateTime, nullable=True)
+    refresh_token_sha256 = Column(String(64), nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
     tenant = relationship("Tenant", back_populates="users")

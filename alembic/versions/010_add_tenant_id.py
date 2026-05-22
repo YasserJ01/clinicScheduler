@@ -4,6 +4,7 @@ Revision ID: 010_add_tenant_id
 Revises: 009
 Create Date: 2026-05-22
 """
+
 from alembic import op
 import sqlalchemy as sa
 
@@ -24,19 +25,26 @@ def upgrade():
             sa.Column("name", sa.String(200), nullable=False),
             sa.Column("slug", sa.String(100), unique=True, nullable=False),
             sa.Column("is_active", sa.Boolean, nullable=False, server_default="true"),
-            sa.Column("created_at", sa.DateTime, nullable=False, server_default=sa.func.now()),
+            sa.Column(
+                "created_at", sa.DateTime, nullable=False, server_default=sa.func.now()
+            ),
         )
         op.create_index("ix_tenants_slug", "tenants", ["slug"], unique=True)
         # Insert default tenant
-        op.execute("INSERT INTO tenants (name, slug) VALUES ('Default Clinic', 'default')")
+        op.execute(
+            "INSERT INTO tenants (name, slug) VALUES ('Default Clinic', 'default')"
+        )
 
     # Helper: add nullable integer column with FK and index
     def add_tenant_column(table, nullable=False):
         col_name = "tenant_id"
         op.add_column(table, sa.Column(col_name, sa.Integer, nullable=True))
         op.create_foreign_key(
-            f"fk_{table}_tenant", table, "tenants",
-            ["tenant_id"], ["id"],
+            f"fk_{table}_tenant",
+            table,
+            "tenants",
+            ["tenant_id"],
+            ["id"],
         )
         op.create_index(f"ix_{table}_tenant_id", table, ["tenant_id"])
 
@@ -56,9 +64,14 @@ def upgrade():
 
     # Backfill existing rows to default tenant
     backfill_tables = [
-        "users", "doctors", "patients", "appointments",
-        "doctor_schedules", "recurring_series",
-        "webhooks", "webhook_deliveries",
+        "users",
+        "doctors",
+        "patients",
+        "appointments",
+        "doctor_schedules",
+        "recurring_series",
+        "webhooks",
+        "webhook_deliveries",
     ]
     if conn.dialect.has_table(conn, "audit_log"):
         backfill_tables.append("audit_log")
@@ -68,9 +81,14 @@ def upgrade():
 
     # Set NOT NULL on columns that must be non-nullable
     not_null_tables = [
-        "users", "doctors", "patients", "appointments",
-        "doctor_schedules", "recurring_series",
-        "webhooks", "webhook_deliveries",
+        "users",
+        "doctors",
+        "patients",
+        "appointments",
+        "doctor_schedules",
+        "recurring_series",
+        "webhooks",
+        "webhook_deliveries",
     ]
     for table in not_null_tables:
         op.alter_column(table, "tenant_id", nullable=False)
@@ -85,9 +103,14 @@ def downgrade():
         op.drop_column(table, "tenant_id")
 
     tables = [
-        "users", "doctors", "patients", "appointments",
-        "doctor_schedules", "recurring_series",
-        "webhooks", "webhook_deliveries",
+        "users",
+        "doctors",
+        "patients",
+        "appointments",
+        "doctor_schedules",
+        "recurring_series",
+        "webhooks",
+        "webhook_deliveries",
     ]
     if conn.dialect.has_table(conn, "audit_log"):
         tables.append("audit_log")

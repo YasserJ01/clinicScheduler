@@ -1,3 +1,4 @@
+import hashlib
 import redis.asyncio as aioredis
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException
@@ -48,8 +49,14 @@ class RefreshRequest(BaseModel):
     refresh_token: str
 
 
-def _get_redis():
-    return aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+_redis: aioredis.Redis | None = None
+
+
+def _get_redis() -> aioredis.Redis:
+    global _redis
+    if _redis is None:
+        _redis = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+    return _redis
 
 
 @router.post("/register", response_model=TokenResponse)
@@ -68,11 +75,13 @@ async def register(
         tenant_id=req.tenant_id,
     )
     raw_refresh, refresh_hash = create_refresh_token(user.username)
+    refresh_sha256 = hashlib.sha256(raw_refresh.encode()).hexdigest()
     expires_at = (
         datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
     ).replace(tzinfo=None)
     await db.execute(select(User).where(User.id == user.id))
     user.refresh_token_hash = refresh_hash
+    user.refresh_token_sha256 = refresh_sha256
     user.refresh_token_expires_at = expires_at
     await db.flush()
     access_token = create_access_token(
@@ -93,10 +102,12 @@ async def login(
     if not user or not verify_password(req.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     raw_refresh, refresh_hash = create_refresh_token(user.username)
+    refresh_sha256 = hashlib.sha256(raw_refresh.encode()).hexdigest()
     expires_at = (
         datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
     ).replace(tzinfo=None)
     user.refresh_token_hash = refresh_hash
+    user.refresh_token_sha256 = refresh_sha256
     user.refresh_token_expires_at = expires_at
     await db.flush()
     access_token = create_access_token(
@@ -112,27 +123,25 @@ async def refresh_token(
     req: RefreshRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(User).where(User.refresh_token_hash.isnot(None)))
-    users = result.scalars().all()
-    matched_user = None
-    for u in users:
-        if u.refresh_token_hash and verify_refresh_token(
-            req.refresh_token, u.refresh_token_hash
-        ):
-            if (
-                u.refresh_token_expires_at
-                and u.refresh_token_expires_at < datetime.utcnow()
-            ):
-                raise HTTPException(status_code=401, detail="Refresh token expired")
-            matched_user = u
-            break
+    lookup = hashlib.sha256(req.refresh_token.encode()).hexdigest()
+    result = await db.execute(select(User).where(User.refresh_token_sha256 == lookup))
+    matched_user = result.scalar_one_or_none()
     if not matched_user:
         raise HTTPException(status_code=401, detail="Invalid refresh token")
+    if not verify_refresh_token(req.refresh_token, matched_user.refresh_token_hash):
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
+    if (
+        matched_user.refresh_token_expires_at
+        and matched_user.refresh_token_expires_at < datetime.utcnow()
+    ):
+        raise HTTPException(status_code=401, detail="Refresh token expired")
     new_raw, new_hash = create_refresh_token(matched_user.username)
+    new_sha256 = hashlib.sha256(new_raw.encode()).hexdigest()
     new_expires = (
         datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
     ).replace(tzinfo=None)
     matched_user.refresh_token_hash = new_hash
+    matched_user.refresh_token_sha256 = new_sha256
     matched_user.refresh_token_expires_at = new_expires
     await db.flush()
     access_token = create_access_token(
@@ -162,18 +171,16 @@ async def logout(
         )
         exp = payload.get("exp")
         if exp:
-            from datetime import datetime, timezone
-
             ttl = int(exp - datetime.now(timezone.utc).timestamp())
             if ttl > 0:
-                jti = (
-                    current_user.get("user_id", "")
-                    + ":"
-                    + current_user.get("_raw_token", "")[:8]
-                )
+                jti = hashlib.sha256(
+                    (
+                        current_user.get("user_id", "")
+                        + ":"
+                        + current_user.get("_raw_token", "")
+                    ).encode()
+                ).hexdigest()
                 await redis.set(f"token_denylist:{jti}", "1", ex=ttl)
     except Exception:
         pass
-    finally:
-        await redis.aclose()
     return {"message": "Logged out successfully"}

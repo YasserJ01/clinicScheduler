@@ -276,7 +276,7 @@
 
         async function cancelAppointment(id) {
             if (!confirm('Cancel this appointment?')) return;
-            const resp = await api(`/appointments/${id}/cancel`, { method: 'PATCH' });
+            const resp = await api(`/appointments/${id}/status`, { method: 'PATCH', body: JSON.stringify({status: 'cancelled'}) });
             if (resp && resp.ok) {
                 showAlert('Appointment cancelled', 'success');
                 loadAppointments();

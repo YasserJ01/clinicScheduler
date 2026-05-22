@@ -2,11 +2,13 @@ import math
 from datetime import datetime, time as dt_time
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from app.db.repository import DoctorRepository, AppointmentRepository, PatientRepository
 from app.api.v1.dependencies import get_current_user
 from app.core.audit import audit_log
+from app.models import Doctor, User
 
 router = APIRouter(prefix="/doctors", tags=["doctors"])
 
@@ -53,6 +55,13 @@ class ScheduleDayUpdate(BaseModel):
     start_time: str | None = None
     end_time: str | None = None
     is_active: bool | None = None
+
+
+async def _get_user_id(db: AsyncSession, current_user: dict) -> int | None:
+    result = await db.execute(
+        select(User.id).where(User.username == current_user.get("user_id"))
+    )
+    return result.scalar_one_or_none()
 
 
 def _parse_time(t: str) -> dt_time:
@@ -350,12 +359,12 @@ async def get_doctor_today_appointments(
     tenant_id = current_user.get("tenant_id")
 
     if role == "doctor":
-        from sqlalchemy import select
-        from app.models import Doctor
-
+        user_pk = await _get_user_id(db, current_user)
+        if user_pk is None:
+            raise HTTPException(status_code=403, detail="User not found")
         doc_result = await db.execute(
             select(Doctor).where(
-                Doctor.user_id == current_user.get("user_id"),
+                Doctor.user_id == user_pk,
                 Doctor.tenant_id == tenant_id,
             )
         )
@@ -408,12 +417,12 @@ async def get_doctor_upcoming_appointments(
     tenant_id = current_user.get("tenant_id")
 
     if role == "doctor":
-        from sqlalchemy import select
-        from app.models import Doctor
-
+        user_pk = await _get_user_id(db, current_user)
+        if user_pk is None:
+            raise HTTPException(status_code=403, detail="User not found")
         doc_result = await db.execute(
             select(Doctor).where(
-                Doctor.user_id == current_user.get("user_id"),
+                Doctor.user_id == user_pk,
                 Doctor.tenant_id == tenant_id,
             )
         )
@@ -463,12 +472,12 @@ async def get_doctor_patients(
     tenant_id = current_user.get("tenant_id")
 
     if role == "doctor":
-        from sqlalchemy import select
-        from app.models import Doctor
-
+        user_pk = await _get_user_id(db, current_user)
+        if user_pk is None:
+            raise HTTPException(status_code=403, detail="User not found")
         doc_result = await db.execute(
             select(Doctor).where(
-                Doctor.user_id == current_user.get("user_id"),
+                Doctor.user_id == user_pk,
                 Doctor.tenant_id == tenant_id,
             )
         )
