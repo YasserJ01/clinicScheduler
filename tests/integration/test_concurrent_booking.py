@@ -1,3 +1,4 @@
+import os
 import httpx
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -24,12 +25,13 @@ class TestConcurrentBooking:
             "time_slot": concurrent_slot,
         }
 
+        base_url = os.getenv("BASE_URL", "http://localhost")
         results = []
         with ThreadPoolExecutor(max_workers=2) as executor:
             futures = []
             for _ in range(2):
                 futures.append(
-                    executor.submit(self._book_appointment, payload, auth_headers)
+                    executor.submit(self._book_appointment, payload, auth_headers, base_url)
                 )
             for future in as_completed(futures):
                 results.append(future.result())
@@ -43,7 +45,7 @@ class TestConcurrentBooking:
         assert conflict_resp["success"] is False
         assert "already occupied" in conflict_resp["error"]
 
-        list_resp = httpx.Client(base_url="http://localhost", timeout=10.0).get(
+        list_resp = httpx.Client(base_url=base_url, timeout=10.0).get(
             "/api/v1/appointments",
             headers=auth_headers,
         )
@@ -60,8 +62,8 @@ class TestConcurrentBooking:
         )
 
     @staticmethod
-    def _book_appointment(payload, headers):
-        client = httpx.Client(base_url="http://localhost", timeout=10.0)
+    def _book_appointment(payload, headers, base_url):
+        client = httpx.Client(base_url=base_url, timeout=10.0)
         resp = client.post("/api/v1/appointments", headers=headers, json=payload)
         return {
             "status_code": resp.status_code,
