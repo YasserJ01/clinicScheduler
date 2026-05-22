@@ -93,28 +93,24 @@ jobs:
         run: python -m pytest tests/unit/ -v
       - name: Start API server
         run: |
-          nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 --log-level info > uvicorn.log 2>&1 &
-          echo "uvicorn PID: $!"
+          uvicorn app.main:app --host 0.0.0.0 --port 8000 --log-level info &
+          UVICORN_PID=$!
+          echo "uvicorn PID: $UVICORN_PID"
           for i in $(seq 1 30); do
             if curl -sf http://localhost:8000/api/v1/health > /dev/null 2>&1; then
               echo "API is ready after $i attempts"
-              exit 0
+              break
             fi
             echo "Waiting for API... (attempt $i)"
             sleep 2
           done
-          echo "=== Uvicorn log (last 50 lines) ==="
-          tail -50 uvicorn.log || true
-          echo "=== Health check response ==="
-          curl -v http://localhost:8000/api/v1/health 2>&1 || true
-          exit 1
+          curl -sf http://localhost:8000/api/v1/health || {
+            echo "API failed to start. Logs:"
+            cat /proc/$UVICORN_PID/fd/1 2>/dev/null || echo "No logs available"
+            exit 1
+          }
       - name: Run integration tests
         run: python -m pytest tests/integration/ -v
-      - name: Show server logs on failure
-        if: failure()
-        run: |
-          echo "=== Uvicorn log ==="
-          cat uvicorn.log || true
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
