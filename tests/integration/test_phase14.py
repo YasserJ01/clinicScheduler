@@ -76,9 +76,9 @@ class TestUserPatientLink:
         assert patient_id != 0
         assert me.json()["email"] == email
 
-        future = (
-            datetime.now(timezone.utc) + timedelta(days=100, hours=10)
-        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        future = (datetime.now(timezone.utc) + timedelta(days=100, hours=10)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
         booking = http_client.post(
             "/api/v1/appointments",
             json={
@@ -105,14 +105,24 @@ class TestUserPatientLink:
 class TestDoctorLink:
     def _db_user_id(self, token: str) -> int | None:
         from jose import jwt
-        payload = jwt.decode(token, _get_secret_key(), algorithms=["HS256"], options={"verify_exp": False})
+
+        payload = jwt.decode(
+            token,
+            _get_secret_key(),
+            algorithms=["HS256"],
+            options={"verify_exp": False},
+        )
         sub = payload.get("sub", "")
         if not sub:
             return None
         import psycopg2
+
         conn = psycopg2.connect(
-            user="clinic", password="clinicpass",
-            host="localhost", port=5433, database="clinic_db",
+            user="clinic",
+            password="clinicpass",
+            host="localhost",
+            port=5433,
+            database="clinic_db",
         )
         try:
             with conn.cursor() as cur:

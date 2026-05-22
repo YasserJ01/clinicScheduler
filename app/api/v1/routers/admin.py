@@ -419,16 +419,12 @@ async def link_doctor_user(
     if not doctor:
         raise HTTPException(status_code=404, detail="Doctor not found")
 
-    user_result = await db.execute(
-        select(User).where(User.id == req.user_id)
-    )
+    user_result = await db.execute(select(User).where(User.id == req.user_id))
     user = user_result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     if user.role != UserRole.DOCTOR:
-        raise HTTPException(
-            status_code=400, detail="User must have doctor role"
-        )
+        raise HTTPException(status_code=400, detail="User must have doctor role")
 
     existing = await db.execute(
         select(Doctor).where(Doctor.user_id == req.user_id, Doctor.id != doctor_id)

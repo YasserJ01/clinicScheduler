@@ -511,9 +511,7 @@ async def update_appointment_status(
             raise HTTPException(
                 status_code=403, detail="Patients can only cancel appointments"
             )
-        user_result = await db.execute(
-            select(User).where(User.username == username)
-        )
+        user_result = await db.execute(select(User).where(User.username == username))
         user = user_result.scalar_one_or_none()
         if not user:
             raise HTTPException(status_code=403, detail="User not found")
