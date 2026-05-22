@@ -46,7 +46,7 @@ class User(Base):
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False)
     username = Column(String(100), nullable=False)
     hashed_password = Column(String(255), nullable=False)
     role = Column(
@@ -71,7 +71,7 @@ class Doctor(Base):
     __table_args__ = (Index("ix_doctors_tenant_id", "tenant_id"),)
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False)
     user_id = Column(
         Integer, ForeignKey("users.id"), nullable=True, unique=True, index=True
     )
@@ -94,7 +94,7 @@ class DoctorSchedule(Base):
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False)
     doctor_id = Column(Integer, ForeignKey("doctors.id"), nullable=False, index=True)
     day_of_week = Column(Integer, nullable=False)
     start_time = Column(Time, nullable=False)
@@ -113,7 +113,7 @@ class Patient(Base):
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False)
     name = Column(String(200), nullable=False)
     email = Column(String(255), nullable=False, index=True)
     phone = Column(String(20), nullable=True)
@@ -134,7 +134,7 @@ class Appointment(Base):
     __table_args__ = (Index("ix_appointments_tenant_id", "tenant_id"),)
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False)
     doctor_id = Column(Integer, ForeignKey("doctors.id"), nullable=False, index=True)
     patient_id = Column(Integer, ForeignKey("patients.id"), nullable=False, index=True)
     appointment_time = Column(DateTime, nullable=False, index=True)
@@ -167,7 +167,7 @@ class RecurringSeries(Base):
     __table_args__ = (Index("ix_recurring_series_tenant_id", "tenant_id"),)
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False)
     doctor_id = Column(Integer, ForeignKey("doctors.id"), nullable=False)
     patient_id = Column(Integer, ForeignKey("patients.id"), nullable=False)
     recurrence = Column(String(20), nullable=False)
@@ -181,7 +181,7 @@ class AuditLog(Base):
     __table_args__ = (Index("ix_audit_log_tenant_id", "tenant_id"),)
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=True)
     actor = Column(String(100), nullable=False)
     action = Column(String(100), nullable=False)
     entity_type = Column(String(50), nullable=True)
@@ -196,7 +196,7 @@ class Webhook(Base):
     __table_args__ = (Index("ix_webhooks_tenant_id", "tenant_id"),)
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False)
     url = Column(String(500), nullable=False)
     secret = Column(String(255), nullable=False)
     events = Column(Text, nullable=False)
@@ -214,7 +214,7 @@ class WebhookDelivery(Base):
     __table_args__ = (Index("ix_webhook_deliveries_tenant_id", "tenant_id"),)
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False)
     webhook_id = Column(Integer, ForeignKey("webhooks.id"), nullable=False, index=True)
     event_type = Column(String(50), nullable=False)
     payload = Column(Text, nullable=False)
