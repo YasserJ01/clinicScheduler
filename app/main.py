@@ -32,9 +32,7 @@ async def seed_data():
     async with async_session_factory() as session:
         from app.models import Doctor, Tenant
 
-        result = await session.execute(
-            text("SELECT COUNT(*) FROM tenants")
-        )
+        result = await session.execute(text("SELECT COUNT(*) FROM tenants"))
         tenant_count = result.scalar()
         if tenant_count == 0:
             session.add(Tenant(name="Default Clinic", slug="default"))
