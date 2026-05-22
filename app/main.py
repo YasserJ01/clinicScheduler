@@ -1,4 +1,5 @@
 import logging
+import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,6 +19,7 @@ from app.api.v1.routers import (
     health,
     admin,
     metrics,
+    analytics,
 )
 from app.api.v2.routers import appointments as appointments_v2, doctors as doctors_v2
 from app.db.session import init_db, async_session_factory, engine
@@ -45,6 +47,14 @@ async def seed_data():
 async def lifespan(app: FastAPI):
     await init_db()
     await seed_data()
+
+    if os.getenv("ENABLE_TELEMETRY", "false").lower() == "true":
+        try:
+            from app.core.telemetry import setup_telemetry
+            setup_telemetry(app)
+        except Exception as e:
+            logging.getLogger("clinic.main").warning("Telemetry init failed: %s", e)
+
     logger = logging.getLogger("clinic.main")
     logger.info("Application started")
     yield
@@ -83,6 +93,7 @@ def create_app() -> FastAPI:
     app.include_router(appointments.router, prefix="/api/v1")
     app.include_router(admin.router, prefix="/api/v1")
     app.include_router(metrics.router, prefix="/api/v1")
+    app.include_router(analytics.router, prefix="/api/v1")
 
     app.include_router(appointments_v2.router, prefix="/api/v2")
     app.include_router(doctors_v2.router, prefix="/api/v2")

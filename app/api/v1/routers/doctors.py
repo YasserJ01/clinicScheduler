@@ -1,10 +1,10 @@
 import math
-from datetime import time as dt_time
+from datetime import datetime, time as dt_time
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
-from app.db.repository import DoctorRepository
+from app.db.repository import DoctorRepository, AppointmentRepository, PatientRepository
 from app.api.v1.dependencies import get_current_user
 from app.core.audit import audit_log
 
@@ -326,3 +326,140 @@ async def delete_schedule_day(
     )
 
     return {"deleted": True, "doctor_id": doctor_id, "day_of_week": day_of_week}
+
+
+@router.get("/{doctor_id}/appointments/today")
+async def get_doctor_today_appointments(
+    doctor_id: int,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    role = current_user.get("role", "patient")
+    if role not in ("doctor", "admin"):
+        raise HTTPException(status_code=403, detail="Doctor or admin access required")
+
+    if role == "doctor":
+        from sqlalchemy import select
+        from app.models import Doctor
+
+        doc_result = await db.execute(
+            select(Doctor).where(Doctor.user_id == current_user.get("user_id"))
+        )
+        linked_doctor = doc_result.scalar_one_or_none()
+        if not linked_doctor or linked_doctor.id != doctor_id:
+            raise HTTPException(
+                status_code=403, detail="Can only access own appointments"
+            )
+
+    repo = DoctorRepository(db)
+    doctor = await repo.get_by_id(doctor_id)
+    if not doctor:
+        raise HTTPException(status_code=404, detail="Doctor not found")
+
+    appt_repo = AppointmentRepository(db)
+    appts = await appt_repo.get_today_appointments(doctor_id)
+    result = []
+    for appt in appts:
+        patient_repo = PatientRepository(db)
+        patient = await patient_repo.get_by_id(appt.patient_id)
+        result.append(
+            {
+                "id": appt.id,
+                "patient_name": patient.name if patient else "Unknown",
+                "appointment_time": appt.appointment_time.isoformat(),
+                "duration_minutes": appt.duration_minutes,
+                "status": appt.status.value,
+                "notes": appt.notes,
+            }
+        )
+
+    return {
+        "doctor_id": doctor_id,
+        "date": datetime.utcnow().date().isoformat(),
+        "appointments": result,
+    }
+
+
+@router.get("/{doctor_id}/appointments/upcoming")
+async def get_doctor_upcoming_appointments(
+    doctor_id: int,
+    days: int = Query(7, ge=1, le=30),
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    role = current_user.get("role", "patient")
+    if role not in ("doctor", "admin"):
+        raise HTTPException(status_code=403, detail="Doctor or admin access required")
+
+    if role == "doctor":
+        from sqlalchemy import select
+        from app.models import Doctor
+
+        doc_result = await db.execute(
+            select(Doctor).where(Doctor.user_id == current_user.get("user_id"))
+        )
+        linked_doctor = doc_result.scalar_one_or_none()
+        if not linked_doctor or linked_doctor.id != doctor_id:
+            raise HTTPException(
+                status_code=403, detail="Can only access own appointments"
+            )
+
+    repo = DoctorRepository(db)
+    doctor = await repo.get_by_id(doctor_id)
+    if not doctor:
+        raise HTTPException(status_code=404, detail="Doctor not found")
+
+    appt_repo = AppointmentRepository(db)
+    appts = await appt_repo.get_upcoming_appointments(doctor_id, days=days)
+    result = []
+    for appt in appts:
+        patient_repo = PatientRepository(db)
+        patient = await patient_repo.get_by_id(appt.patient_id)
+        result.append(
+            {
+                "id": appt.id,
+                "patient_name": patient.name if patient else "Unknown",
+                "appointment_time": appt.appointment_time.isoformat(),
+                "duration_minutes": appt.duration_minutes,
+                "status": appt.status.value,
+                "notes": appt.notes,
+            }
+        )
+
+    return {"doctor_id": doctor_id, "days": days, "appointments": result}
+
+
+@router.get("/{doctor_id}/patients")
+async def get_doctor_patients(
+    doctor_id: int,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    role = current_user.get("role", "patient")
+    if role not in ("doctor", "admin"):
+        raise HTTPException(status_code=403, detail="Doctor or admin access required")
+
+    if role == "doctor":
+        from sqlalchemy import select
+        from app.models import Doctor
+
+        doc_result = await db.execute(
+            select(Doctor).where(Doctor.user_id == current_user.get("user_id"))
+        )
+        linked_doctor = doc_result.scalar_one_or_none()
+        if not linked_doctor or linked_doctor.id != doctor_id:
+            raise HTTPException(status_code=403, detail="Can only access own patients")
+
+    repo = DoctorRepository(db)
+    doctor = await repo.get_by_id(doctor_id)
+    if not doctor:
+        raise HTTPException(status_code=404, detail="Doctor not found")
+
+    patient_repo = PatientRepository(db)
+    patients = await patient_repo.get_patients_for_doctor(doctor_id)
+    result = [
+        {"id": p.id, "name": p.name, "email": p.email, "phone": p.phone}
+        for p in patients
+    ]
+
+    return {"doctor_id": doctor_id, "patients": result}

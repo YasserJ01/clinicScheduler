@@ -50,6 +50,7 @@ class Doctor(Base):
     __tablename__ = "doctors"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, unique=True, index=True)
     name = Column(String(200), nullable=False)
     specialty = Column(String(100), nullable=False)
     is_active = Column(Boolean, nullable=False, default=True)
@@ -149,3 +150,33 @@ class AuditLog(Base):
     details = Column(Text, nullable=True)
     outcome = Column(String(20), nullable=False, default="success")
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class Webhook(Base):
+    __tablename__ = "webhooks"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    url = Column(String(500), nullable=False)
+    secret = Column(String(255), nullable=False)
+    events = Column(Text, nullable=False)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_by = Column(String(100), nullable=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    deliveries = relationship("WebhookDelivery", back_populates="webhook", cascade="all, delete-orphan")
+
+
+class WebhookDelivery(Base):
+    __tablename__ = "webhook_deliveries"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    webhook_id = Column(Integer, ForeignKey("webhooks.id"), nullable=False, index=True)
+    event_type = Column(String(50), nullable=False)
+    payload = Column(Text, nullable=False)
+    response_status = Column(Integer, nullable=True)
+    response_body = Column(Text, nullable=True)
+    attempt = Column(Integer, nullable=False, default=1)
+    success = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    webhook = relationship("Webhook", back_populates="deliveries")

@@ -1,12 +1,16 @@
 import json
 import logging
+import secrets
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from app.db.repository import PatientRepository, AppointmentRepository
 from app.api.v1.dependencies import get_current_user
 from app.core.audit import audit_log
+from app.models import Webhook, WebhookDelivery
 
 logger = logging.getLogger("clinic.admin")
 
@@ -131,4 +135,241 @@ async def anonymise_patient(
             "email": f"anonymized-{patient.id}@redacted.local",
             "phone": None,
         },
+    }
+
+
+class WebhookCreate(BaseModel):
+    url: str
+    events: list[str]
+    is_active: bool = True
+
+
+class WebhookUpdate(BaseModel):
+    url: str | None = None
+    events: list[str] | None = None
+    is_active: bool | None = None
+
+
+@router.post("/webhooks", status_code=201)
+async def create_webhook(
+    req: WebhookCreate,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    _require_admin(current_user)
+
+    secret = secrets.token_hex(32)
+    webhook = Webhook(
+        url=req.url,
+        secret=secret,
+        events=json.dumps(req.events),
+        is_active=req.is_active,
+        created_by=current_user["user_id"],
+    )
+    db.add(webhook)
+    await db.flush()
+
+    await audit_log(
+        db,
+        actor=current_user["user_id"],
+        action="create_webhook",
+        entity_type="webhook",
+        entity_id=webhook.id,
+        details={"url": req.url, "events": req.events},
+    )
+
+    return {
+        "id": webhook.id,
+        "url": webhook.url,
+        "events": req.events,
+        "is_active": webhook.is_active,
+        "secret": secret,
+        "created_at": webhook.created_at.isoformat() if webhook.created_at else None,
+    }
+
+
+@router.get("/webhooks")
+async def list_webhooks(
+    page: int = 1,
+    page_size: int = 20,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    _require_admin(current_user)
+
+    count_result = await db.execute(select(func.count(Webhook.id)))
+    total = count_result.scalar() or 0
+    stmt = (
+        select(Webhook)
+        .order_by(Webhook.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    result = await db.execute(stmt)
+    webhooks = result.scalars().all()
+
+    items = [
+        {
+            "id": w.id,
+            "url": w.url,
+            "events": json.loads(w.events),
+            "is_active": w.is_active,
+            "created_by": w.created_by,
+            "created_at": w.created_at.isoformat() if w.created_at else None,
+        }
+        for w in webhooks
+    ]
+
+    pages = (total + page_size - 1) // page_size if total > 0 else 0
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "pages": pages,
+    }
+
+
+@router.get("/webhooks/{webhook_id}")
+async def get_webhook(
+    webhook_id: int,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    _require_admin(current_user)
+
+    result = await db.execute(select(Webhook).where(Webhook.id == webhook_id))
+    webhook = result.scalar_one_or_none()
+    if not webhook:
+        raise HTTPException(status_code=404, detail="Webhook not found")
+
+    return {
+        "id": webhook.id,
+        "url": webhook.url,
+        "events": json.loads(webhook.events),
+        "is_active": webhook.is_active,
+        "created_by": webhook.created_by,
+        "created_at": webhook.created_at.isoformat() if webhook.created_at else None,
+    }
+
+
+@router.patch("/webhooks/{webhook_id}")
+async def update_webhook(
+    webhook_id: int,
+    req: WebhookUpdate,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    _require_admin(current_user)
+
+    result = await db.execute(select(Webhook).where(Webhook.id == webhook_id))
+    webhook = result.scalar_one_or_none()
+    if not webhook:
+        raise HTTPException(status_code=404, detail="Webhook not found")
+
+    if req.url is not None:
+        webhook.url = req.url
+    if req.events is not None:
+        webhook.events = json.dumps(req.events)
+    if req.is_active is not None:
+        webhook.is_active = req.is_active
+
+    await db.flush()
+
+    await audit_log(
+        db,
+        actor=current_user["user_id"],
+        action="update_webhook",
+        entity_type="webhook",
+        entity_id=webhook_id,
+        details={"url": req.url, "events": req.events, "is_active": req.is_active},
+    )
+
+    return {
+        "id": webhook.id,
+        "url": webhook.url,
+        "events": json.loads(webhook.events),
+        "is_active": webhook.is_active,
+    }
+
+
+@router.delete("/webhooks/{webhook_id}")
+async def delete_webhook(
+    webhook_id: int,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    _require_admin(current_user)
+
+    result = await db.execute(select(Webhook).where(Webhook.id == webhook_id))
+    webhook = result.scalar_one_or_none()
+    if not webhook:
+        raise HTTPException(status_code=404, detail="Webhook not found")
+
+    await db.delete(webhook)
+    await db.flush()
+
+    await audit_log(
+        db,
+        actor=current_user["user_id"],
+        action="delete_webhook",
+        entity_type="webhook",
+        entity_id=webhook_id,
+    )
+
+    return {"success": True, "message": f"Webhook {webhook_id} deleted"}
+
+
+@router.get("/webhooks/{webhook_id}/deliveries")
+async def list_webhook_deliveries(
+    webhook_id: int,
+    page: int = 1,
+    page_size: int = 20,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    _require_admin(current_user)
+
+    result = await db.execute(select(Webhook).where(Webhook.id == webhook_id))
+    webhook = result.scalar_one_or_none()
+    if not webhook:
+        raise HTTPException(status_code=404, detail="Webhook not found")
+
+    from sqlalchemy import func as sql_func
+
+    count_stmt = select(sql_func.count(WebhookDelivery.id)).where(
+        WebhookDelivery.webhook_id == webhook_id
+    )
+    count_result = await db.execute(count_stmt)
+    total = count_result.scalar() or 0
+
+    stmt = (
+        select(WebhookDelivery)
+        .where(WebhookDelivery.webhook_id == webhook_id)
+        .order_by(WebhookDelivery.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    deliveries_result = await db.execute(stmt)
+    deliveries = deliveries_result.scalars().all()
+
+    items = [
+        {
+            "id": d.id,
+            "event_type": d.event_type,
+            "response_status": d.response_status,
+            "success": d.success,
+            "attempt": d.attempt,
+            "created_at": d.created_at.isoformat() if d.created_at else None,
+        }
+        for d in deliveries
+    ]
+
+    pages = (total + page_size - 1) // page_size if total > 0 else 0
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "pages": pages,
     }

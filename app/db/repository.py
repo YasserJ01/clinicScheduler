@@ -232,6 +232,16 @@ class PatientRepository:
         await self.session.flush()
         return patient
 
+    async def get_patients_for_doctor(self, doctor_id: int) -> Sequence[Patient]:
+        result = await self.session.execute(
+            select(Patient)
+            .join(Appointment, Patient.id == Appointment.patient_id)
+            .where(Appointment.doctor_id == doctor_id)
+            .distinct()
+            .order_by(Patient.name)
+        )
+        return result.scalars().all()
+
 
 class AppointmentRepository:
     def __init__(self, session: AsyncSession):
@@ -477,3 +487,35 @@ class AppointmentRepository:
         if appt:
             appt.reminder_sent = True
             await self.session.flush()
+
+    async def get_today_appointments(self, doctor_id: int) -> Sequence[Appointment]:
+        now = datetime.utcnow()
+        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        day_end = day_start + timedelta(days=1)
+        result = await self.session.execute(
+            select(Appointment)
+            .where(
+                Appointment.doctor_id == doctor_id,
+                Appointment.appointment_time >= day_start,
+                Appointment.appointment_time < day_end,
+            )
+            .order_by(Appointment.appointment_time)
+        )
+        return result.scalars().all()
+
+    async def get_upcoming_appointments(
+        self, doctor_id: int, days: int = 7
+    ) -> Sequence[Appointment]:
+        now = datetime.utcnow()
+        end = now + timedelta(days=days)
+        result = await self.session.execute(
+            select(Appointment)
+            .where(
+                Appointment.doctor_id == doctor_id,
+                Appointment.appointment_time >= now,
+                Appointment.appointment_time <= end,
+                Appointment.status.in_(["scheduled", "confirmed"]),
+            )
+            .order_by(Appointment.appointment_time)
+        )
+        return result.scalars().all()

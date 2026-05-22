@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Clinic Scheduler - Patient Portal</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f7fa; color: #333; }
+        .container { max-width: 900px; margin: 0 auto; padding: 20px; }
+        .header { background: #2563eb; color: white; padding: 16px 20px; display: flex; justify-content: space-between; align-items: center; }
+        .header h1 { font-size: 1.4rem; }
+        .header .user-info { display: flex; align-items: center; gap: 12px; }
+        .header button { background: rgba(255,255,255,0.2); border: none; color: white; padding: 8px 16px; border-radius: 6px; cursor: pointer; }
+        .header button:hover { background: rgba(255,255,255,0.3); }
+        .card { background: white; border-radius: 10px; padding: 24px; margin: 20px 0; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .card h2 { margin-bottom: 16px; color: #1e40af; }
+        .form-group { margin-bottom: 16px; }
+        .form-group label { display: block; margin-bottom: 6px; font-weight: 500; }
+        .form-group input, .form-group select { width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; }
+        .btn { padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; }
+        .btn-primary { background: #2563eb; color: white; }
+        .btn-primary:hover { background: #1d4ed8; }
+        .btn-danger { background: #ef4444; color: white; }
+        .btn-danger:hover { background: #dc2626; }
+        .btn-secondary { background: #6b7280; color: white; }
+        .btn-secondary:hover { background: #4b5563; }
+        .btn-sm { padding: 6px 12px; font-size: 12px; }
+        .tabs { display: flex; gap: 8px; margin-bottom: 20px; }
+        .tab { padding: 10px 20px; border: none; background: #e5e7eb; border-radius: 6px 6px 0 0; cursor: pointer; }
+        .tab.active { background: #2563eb; color: white; }
+        .appointment-list { list-style: none; }
+        .appointment-item { padding: 16px; border: 1px solid #e5e7eb; border-radius: 8px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; }
+        .appointment-item .details h3 { font-size: 1rem; margin-bottom: 4px; }
+        .appointment-item .details p { color: #6b7280; font-size: 0.9rem; }
+        .status-badge { padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 500; }
+        .status-scheduled { background: #dbeafe; color: #1e40af; }
+        .status-confirmed { background: #d1fae5; color: #065f46; }
+        .status-completed { background: #e5e7eb; color: #374151; }
+        .status-cancelled { background: #fee2e2; color: #991b1b; }
+        .doctor-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 16px; }
+        .doctor-card { padding: 16px; border: 1px solid #e5e7eb; border-radius: 8px; }
+        .doctor-card h3 { margin-bottom: 4px; }
+        .doctor-card p { color: #6b7280; font-size: 0.9rem; }
+        .hidden { display: none; }
+        .alert { padding: 12px 16px; border-radius: 6px; margin-bottom: 16px; }
+        .alert-error { background: #fee2e2; color: #991b1b; }
+        .alert-success { background: #d1fae5; color: #065f46; }
+        .auth-container { max-width: 400px; margin: 80px auto; }
+        .auth-container .card { text-align: center; }
+        .auth-container h2 { margin-bottom: 24px; }
+        .time-slots { display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 8px; margin-top: 12px; }
+        .time-slot { padding: 10px; border: 1px solid #d1d5db; border-radius: 6px; text-align: center; cursor: pointer; }
+        .time-slot:hover { border-color: #2563eb; background: #eff6ff; }
+        .time-slot.selected { background: #2563eb; color: white; border-color: #2563eb; }
+        .time-slot.disabled { background: #f3f4f6; color: #9ca3af; cursor: not-allowed; }
+        .loading { text-align: center; padding: 40px; color: #6b7280; }
+    </style>
+</head>
+<body>
+    <div id="auth-view" class="auth-container">
+        <div class="card">
+            <h2>Clinic Scheduler</h2>
+            <div class="tabs">
+                <button class="tab active" onclick="showAuthTab('login')">Login</button>
+                <button class="tab" onclick="showAuthTab('register')">Register</button>
+            </div>
+            <div id="login-form">
+                <div class="form-group">
+                    <label>Username</label>
+                    <input type="text" id="login-username" placeholder="Enter username">
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" id="login-password" placeholder="Enter password">
+                </div>
+                <button class="btn btn-primary" style="width:100%" onclick="login()">Login</button>
+            </div>
+            <div id="register-form" class="hidden">
+                <div class="form-group">
+                    <label>Username</label>
+                    <input type="text" id="reg-username" placeholder="Choose username">
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" id="reg-password" placeholder="Choose password">
+                </div>
+                <div class="form-group">
+                    <label>Full Name</label>
+                    <input type="text" id="reg-name" placeholder="Your full name">
+                </div>
+                <div class="form-group">
+                    <label>Email</label>
+                    <input type="email" id="reg-email" placeholder="your@email.com">
+                </div>
+                <button class="btn btn-primary" style="width:100%" onclick="register()">Register</button>
+            </div>
+            <div id="auth-alert"></div>
+        </div>
+    </div>
+
+    <div id="portal-view" class="hidden">
+        <div class="header">
+            <h1>Clinic Scheduler</h1>
+            <div class="user-info">
+                <span id="user-display"></span>
+                <button onclick="logout()">Logout</button>
+            </div>
+        </div>
+        <div class="container">
+            <div class="tabs">
+                <button class="tab active" onclick="showTab('appointments')">My Appointments</button>
+                <button class="tab" onclick="showTab('book')">Book Appointment</button>
+                <button class="tab" onclick="showTab('doctors')">Doctors</button>
+            </div>
+            <div id="alert-container"></div>
+
+            <div id="appointments-tab">
+                <div class="card">
+                    <h2>My Appointments</h2>
+                    <div id="appointments-list" class="loading">Loading...</div>
+                </div>
+            </div>
+
+            <div id="book-tab" class="hidden">
+                <div class="card">
+                    <h2>Book New Appointment</h2>
+                    <div class="form-group">
+                        <label>Select Doctor</label>
+                        <select id="book-doctor" onchange="loadAvailableSlots()">
+                            <option value="">-- Choose a doctor --</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Select Date</label>
+                        <input type="date" id="book-date" onchange="loadAvailableSlots()">
+                    </div>
+                    <div id="time-slots-container"></div>
+                    <div id="booking-confirm" class="hidden" style="margin-top:16px">
+                        <button class="btn btn-primary" onclick="confirmBooking()">Confirm Booking</button>
+                    </div>
+                </div>
+            </div>
+
+            <div id="doctors-tab" class="hidden">
+                <div class="card">
+                    <h2>Our Doctors</h2>
+                    <div id="doctors-list" class="loading">Loading...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = '/api/v1';
+        let token = localStorage.getItem('token');
+        let selectedSlot = null;
+        let patientId = null;
+
+        async function api(path, options = {}) {
+            const headers = { 'Content-Type': 'application/json', ...options.headers };
+            if (token) headers['Authorization'] = `Bearer ${token}`;
+            const resp = await fetch(API_BASE + path, { ...options, headers });
+            if (resp.status === 401) { logout(); return null; }
+            return resp;
+        }
+
+        function showAlert(msg, type = 'error') {
+            const el = document.getElementById('alert-container');
+            el.innerHTML = `<div class="alert alert-${type}">${msg}</div>`;
+            setTimeout(() => el.innerHTML = '', 4000);
+        }
+
+        function showAuthTab(tab) {
+            document.querySelectorAll('#auth-view .tab').forEach(t => t.classList.remove('active'));
+            event.target.classList.add('active');
+            document.getElementById('login-form').classList.toggle('hidden', tab !== 'login');
+            document.getElementById('register-form').classList.toggle('hidden', tab !== 'register');
+        }
+
+        async function login() {
+            const username = document.getElementById('login-username').value;
+            const password = document.getElementById('login-password').value;
+            const resp = await fetch(API_BASE + '/auth/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, password })
+            });
+            const data = await resp.json();
+            if (resp.ok) {
+                token = data.access_token;
+                localStorage.setItem('token', token);
+                initPortal();
+            } else {
+                document.getElementById('auth-alert').innerHTML = `<div class="alert alert-error">${data.detail || 'Login failed'}</div>`;
+            }
+        }
+
+        async function register() {
+            const username = document.getElementById('reg-username').value;
+            const password = document.getElementById('reg-password').value;
+            const name = document.getElementById('reg-name').value;
+            const email = document.getElementById('reg-email').value;
+            const resp = await fetch(API_BASE + '/auth/register', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, password, role: 'patient' })
+            });
+            const data = await resp.json();
+            if (resp.ok) {
+                const patientResp = await fetch(API_BASE + '/patients', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${data.access_token}` },
+                    body: JSON.stringify({ name, email })
+                });
+                if (patientResp.ok) {
+                    token = data.access_token;
+                    localStorage.setItem('token', token);
+                    initPortal();
+                }
+            } else {
+                document.getElementById('auth-alert').innerHTML = `<div class="alert alert-error">${data.detail || 'Registration failed'}</div>`;
+            }
+        }
+
+        function logout() {
+            token = null;
+            localStorage.removeItem('token');
+            document.getElementById('auth-view').classList.remove('hidden');
+            document.getElementById('portal-view').classList.add('hidden');
+        }
+
+        function showTab(tab) {
+            document.querySelectorAll('.container > .tabs .tab').forEach(t => t.classList.remove('active'));
+            event.target.classList.add('active');
+            document.getElementById('appointments-tab').classList.toggle('hidden', tab !== 'appointments');
+            document.getElementById('book-tab').classList.toggle('hidden', tab !== 'book');
+            document.getElementById('doctors-tab').classList.toggle('hidden', tab !== 'doctors');
+            if (tab === 'appointments') loadAppointments();
+            if (tab === 'book') loadDoctorsForBooking();
+            if (tab === 'doctors') loadDoctors();
+        }
+
+        async function initPortal() {
+            document.getElementById('auth-view').classList.add('hidden');
+            document.getElementById('portal-view').classList.remove('hidden');
+            document.getElementById('user-display').textContent = 'Patient';
+            loadAppointments();
+        }
+
+        async function loadAppointments() {
+            const el = document.getElementById('appointments-list');
+            el.innerHTML = '<div class="loading">Loading...</div>';
+            const resp = await api('/appointments');
+            if (!resp) return;
+            const data = await resp.json();
+            const myAppts = data.items || [];
+            if (myAppts.length === 0) {
+                el.innerHTML = '<p style="text-align:center;color:#6b7280;padding:20px">No appointments yet</p>';
+                return;
+            }
+            el.innerHTML = '<ul class="appointment-list">' + myAppts.map(a => `
+                <li class="appointment-item">
+                    <div class="details">
+                        <h3>Doctor #${a.doctor_id}</h3>
+                        <p>${new Date(a.appointment_time).toLocaleString()}</p>
+                        <p>${a.duration_minutes} min</p>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:12px">
+                        <span class="status-badge status-${a.status}">${a.status}</span>
+                        ${a.status === 'scheduled' ? `<button class="btn btn-danger btn-sm" onclick="cancelAppointment(${a.id})">Cancel</button>` : ''}
+                    </div>
+                </li>
+            `).join('') + '</ul>';
+        }
+
+        async function cancelAppointment(id) {
+            if (!confirm('Cancel this appointment?')) return;
+            const resp = await api(`/appointments/${id}/cancel`, { method: 'PATCH' });
+            if (resp && resp.ok) {
+                showAlert('Appointment cancelled', 'success');
+                loadAppointments();
+            }
+        }
+
+        async function loadDoctorsForBooking() {
+            const resp = await api('/doctors');
+            if (!resp) return;
+            const data = await resp.json();
+            const select = document.getElementById('book-doctor');
+            select.innerHTML = '<option value="">-- Choose a doctor --</option>' +
+                (data.items || []).map(d => `<option value="${d.id}">${d.name} - ${d.specialty}</option>`).join('');
+        }
+
+        async function loadAvailableSlots() {
+            const doctorId = document.getElementById('book-doctor').value;
+            const date = document.getElementById('book-date').value;
+            const container = document.getElementById('time-slots-container');
+            document.getElementById('booking-confirm').classList.add('hidden');
+            selectedSlot = null;
+            if (!doctorId || !date) { container.innerHTML = ''; return; }
+            container.innerHTML = '<div class="loading">Loading slots...</div>';
+            const resp = await api(`/appointments/available?doctor_id=${doctorId}&date=${date}T00:00:00Z`);
+            if (!resp) return;
+            const data = await resp.json();
+            const slots = data.available_slots || [];
+            if (slots.length === 0) {
+                container.innerHTML = '<p style="color:#6b7280">No available slots for this date</p>';
+                return;
+            }
+            container.innerHTML = '<p style="margin-bottom:8px;font-weight:500">Available Times:</p><div class="time-slots">' +
+                slots.map(s => `<div class="time-slot" onclick="selectSlot('${s}', this)">${s}</div>`).join('') + '</div>';
+        }
+
+        function selectSlot(slot, el) {
+            document.querySelectorAll('.time-slot').forEach(s => s.classList.remove('selected'));
+            el.classList.add('selected');
+            selectedSlot = slot;
+            document.getElementById('booking-confirm').classList.remove('hidden');
+        }
+
+        async function confirmBooking() {
+            const doctorId = document.getElementById('book-doctor').value;
+            const date = document.getElementById('book-date').value;
+            if (!selectedSlot) return;
+            const timeSlot = `${date}T${selectedSlot}:00Z`;
+            const resp = await api('/appointments', {
+                method: 'POST',
+                body: JSON.stringify({ doctor_id: parseInt(doctorId), patient_id: patientId || 1, time_slot: timeSlot })
+            });
+            if (resp && resp.ok) {
+                showAlert('Appointment booked successfully!', 'success');
+                document.getElementById('time-slots-container').innerHTML = '';
+                document.getElementById('booking-confirm').classList.add('hidden');
+                selectedSlot = null;
+            } else {
+                const data = resp ? await resp.json() : {};
+                showAlert(data.detail || 'Booking failed');
+            }
+        }
+
+        async function loadDoctors() {
+            const el = document.getElementById('doctors-list');
+            el.innerHTML = '<div class="loading">Loading...</div>';
+            const resp = await api('/doctors');
+            if (!resp) return;
+            const data = await resp.json();
+            const doctors = data.items || [];
+            el.innerHTML = '<div class="doctor-grid">' + doctors.map(d => `
+                <div class="doctor-card">
+                    <h3>${d.name}</h3>
+                    <p>${d.specialty}</p>
+                </div>
+            `).join('') + '</div>';
+        }
+
+        if (token) {
+            initPortal();
+        }
+    </script>
+</body>
+</html>
