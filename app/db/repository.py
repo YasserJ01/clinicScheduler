@@ -231,7 +231,7 @@ class PatientRepository:
         return result.scalar_one_or_none()
 
     async def get_or_create_by_email(
-        self, name: str, email: str, tenant_id: int = 1
+        self, name: str, email: str, tenant_id: int = 1, user_id: int | None = None
     ) -> Patient:
         result = await self.session.execute(
             select(Patient).where(
@@ -240,9 +240,15 @@ class PatientRepository:
         )
         patient = result.scalar_one_or_none()
         if not patient:
-            patient = Patient(name=name, email=email, tenant_id=tenant_id)
+            patient = Patient(
+                name=name, email=email, tenant_id=tenant_id, user_id=user_id
+            )
             self.session.add(patient)
             await self.session.flush()
+        else:
+            if user_id is not None and patient.user_id is None:
+                patient.user_id = user_id
+                await self.session.flush()
         return patient
 
     async def anonymise(self, patient_id: int) -> Patient | None:

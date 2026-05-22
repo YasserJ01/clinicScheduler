@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 from app.db.session import get_db
 from app.db.repository import PatientRepository
-from app.models import Patient
+from app.models import Patient, User
 from app.api.v1.dependencies import get_current_user
 from app.core.audit import audit_log
 
@@ -40,9 +40,13 @@ async def create_patient(
     db: AsyncSession = Depends(get_db),
 ):
     tenant_id = current_user.get("tenant_id", 1)
+    result = await db.execute(
+        select(User.id).where(User.username == current_user.get("user_id"))
+    )
+    user_pk = result.scalar_one_or_none()
     repo = PatientRepository(db)
     patient = await repo.get_or_create_by_email(
-        req.name, req.email, tenant_id=tenant_id
+        req.name, req.email, tenant_id=tenant_id, user_id=user_pk
     )
     return {"id": patient.id, "name": patient.name, "email": patient.email}
 
@@ -77,17 +81,22 @@ async def get_my_profile(
     db: AsyncSession = Depends(get_db),
 ):
     tenant_id = current_user.get("tenant_id", 1)
-    username = current_user["user_id"]
     result = await db.execute(
+        select(User.id).where(User.username == current_user.get("user_id"))
+    )
+    user_pk = result.scalar_one_or_none()
+    if user_pk is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    patient_result = await db.execute(
         select(Patient).where(
-            Patient.email == f"{username}@clinic.com",
+            Patient.user_id == user_pk,
             Patient.tenant_id == tenant_id,
         )
     )
-    patient = result.scalar_one_or_none()
-    if patient:
-        return {"id": patient.id, "name": patient.name, "email": patient.email}
-    return {"id": 0, "name": username, "email": f"{username}@clinic.com"}
+    patient = patient_result.scalar_one_or_none()
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient profile not found")
+    return {"id": patient.id, "name": patient.name, "email": patient.email}
 
 
 @router.get("/{patient_id}", response_model=PatientResponse)

@@ -47,18 +47,28 @@ class TestConcurrentBooking:
         assert conflict_resp["success"] is False
         assert "already occupied" in conflict_resp["error"]
 
-        list_resp = httpx.Client(base_url=base_url, timeout=10.0).get(
-            "/api/v1/appointments",
-            headers=auth_headers,
-        )
-        assert list_resp.status_code == 200
-        appointments = list_resp.json()["items"]
-        matching = [
-            a
-            for a in appointments
-            if a["time_slot"].startswith(concurrent_slot.rstrip("Z"))
-            and a["doctor_id"] == seeded_doctor_id
-        ]
+        client = httpx.Client(base_url=base_url, timeout=10.0)
+        page = 1
+        page_size = 100
+        matching = []
+        while True:
+            list_resp = client.get(
+                "/api/v1/appointments",
+                params={"page": page, "page_size": page_size},
+                headers=auth_headers,
+            )
+            assert list_resp.status_code == 200
+            data = list_resp.json()
+            page_matches = [
+                a
+                for a in data["items"]
+                if a["time_slot"].startswith(concurrent_slot.rstrip("Z"))
+                and a["doctor_id"] == seeded_doctor_id
+            ]
+            matching.extend(page_matches)
+            if page >= data.get("pages", 1):
+                break
+            page += 1
         assert len(matching) == 1, (
             f"Expected exactly 1 appointment, found {len(matching)}"
         )
