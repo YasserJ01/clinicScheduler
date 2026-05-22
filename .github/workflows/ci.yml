@@ -48,13 +48,6 @@ jobs:
   test:
     needs: [lint, security, nginx-config]
     runs-on: ubuntu-latest
-    env:
-      DATABASE_URL: postgresql+asyncpg://clinic:clinicpass@localhost:5432/clinic_db
-      REDIS_URL: redis://:redispass@localhost:6379/0
-      SECRET_KEY: ci-test-secret-key
-      CHAOS_ENABLED: "true"
-      FRONTEND_URL: "*"
-      BASE_URL: http://localhost:8000
     services:
       postgres:
         image: postgres:16-alpine
@@ -65,7 +58,7 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U clinic"
+          --health-cmd "pg_isready -U clinic -d clinic_db"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
@@ -90,19 +83,39 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: Run unit tests
-        run: python -m pytest tests/unit/ -v
+        run: |
+          DATABASE_URL=postgresql+asyncpg://clinic:clinicpass@localhost:5432/clinic_db \
+          REDIS_URL=redis://:redispass@localhost:6379/0 \
+          SECRET_KEY=ci-test-secret-key \
+          python -m pytest tests/unit/ -v
       - name: Start API server
         run: |
-          nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 &
-          for i in {1..30}; do
-            if curl -sf http://localhost:8000/api/v1/health > /dev/null; then
-              echo "API is ready"
+          export DATABASE_URL=postgresql+asyncpg://clinic:clinicpass@localhost:5432/clinic_db
+          export REDIS_URL=redis://:redispass@localhost:6379/0
+          export SECRET_KEY=ci-test-secret-key
+          export CHAOS_ENABLED=true
+          export FRONTEND_URL="*"
+          export BASE_URL=http://localhost:8000
+          uvicorn app.main:app --host 0.0.0.0 --port 8000 &
+          APP_PID=$!
+          echo "uvicorn started with PID $APP_PID"
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8000/api/v1/health > /dev/null 2>&1; then
+              echo "API is ready after $i attempts"
               break
             fi
-            echo "Waiting for API... ($i)"
+            echo "Waiting for API... (attempt $i)"
             sleep 2
           done
+          curl -v http://localhost:8000/api/v1/health || echo "Health check failed"
       - name: Run integration tests
+        env:
+          DATABASE_URL: postgresql+asyncpg://clinic:clinicpass@localhost:5432/clinic_db
+          REDIS_URL: redis://:redispass@localhost:6379/0
+          SECRET_KEY: ci-test-secret-key
+          CHAOS_ENABLED: "true"
+          FRONTEND_URL: "*"
+          BASE_URL: http://localhost:8000
         run: python -m pytest tests/integration/ -v
       - name: Upload test results
         if: always()
