@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: clinic-scheduler-config
+  namespace: clinic-scheduler
+data:
+  LOG_LEVEL: "warning"
+  FRONTEND_URL: "https://app.clinic.example.com"
+  ALEMBIC_ENABLED: "true"
+  CHAOS_ENABLED: "false"
+  ALGORITHM: "HS256"
+  ACCESS_TOKEN_EXPIRE_MINUTES: "15"
+  REFRESH_TOKEN_EXPIRE_DAYS: "7"

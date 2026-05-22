@@ -33,8 +33,19 @@ jobs:
       - name: Run bandit security scan
         run: bandit -r app/ -ll
 
+  nginx-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate NGINX config
+        run: |
+          docker run --rm \
+            -v $(pwd)/nginx:/etc/nginx/custom:ro \
+            nginx:1.25-alpine \
+            nginx -t -c /etc/nginx/custom/nginx.conf
+
   test:
-    needs: [lint, security]
+    needs: [lint, security, nginx-config]
     runs-on: ubuntu-latest
     services:
       postgres:

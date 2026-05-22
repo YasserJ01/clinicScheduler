@@ -20,7 +20,7 @@ services:
       replicas: 3
     environment:
       - DATABASE_URL=postgresql+asyncpg://clinic:clinicpass@db:5432/clinic_db
-      - REDIS_URL=redis://redis:6379/0
+      - REDIS_URL=redis://:redispass@redis:6379/0
       - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
       - LOG_LEVEL=info
       - FRONTEND_URL=${FRONTEND_URL:-*}
@@ -30,6 +30,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      pgbouncer:
+        condition: service_started
     networks:
       - clinic-net
     restart: unless-stopped
@@ -53,13 +55,39 @@ services:
       - clinic-net
     restart: unless-stopped
 
+  pgbouncer:
+    image: edoburu/pgbouncer:latest
+    environment:
+      - DATABASE_URL=postgresql://clinic:clinicpass@db:5432/clinic_db
+      - POOL_MODE=transaction
+      - MAX_CLIENT_CONN=200
+      - DEFAULT_POOL_SIZE=20
+      - AUTH_TYPE=trust
+      - ADMIN_USERS=clinic
+    ports:
+      - "6432:5432"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - clinic-net
+    restart: unless-stopped
+
   redis:
     image: redis:7-alpine
-    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
+    command: >
+      redis-server
+      --maxmemory 128mb
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+      --appendfilename clinic_aof.aof
+      --requirepass redispass
+    volumes:
+      - redis-data:/data
     ports:
       - "6380:6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "redispass", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -73,3 +101,4 @@ networks:
 
 volumes:
   pgdata:
+  redis-data:

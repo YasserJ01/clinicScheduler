@@ -1,0 +1,61 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: postgres-backup
+  namespace: clinic-scheduler
+spec:
+  schedule: "0 2 * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+            - name: pg-dump
+              image: postgres:16-alpine
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -e
+                  BACKUP_DIR="/backup"
+                  TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+                  BACKUP_FILE="clinic_${TIMESTAMP}.sql.gz"
+
+                  echo "Starting backup: ${BACKUP_FILE}"
+                  PGPASSWORD="${DB_PASSWORD}" pg_dump \
+                    -h clinic-postgres \
+                    -U clinic \
+                    -d clinic_db \
+                    | gzip > "${BACKUP_DIR}/${BACKUP_FILE}"
+
+                  echo "Backup complete: $(ls -lh ${BACKUP_DIR}/${BACKUP_FILE})"
+
+                  # Keep only last 30 backups
+                  ls -t ${BACKUP_DIR}/clinic_*.sql.gz | tail -n +31 | xargs -r rm
+
+                  echo "Backup retention cleanup complete"
+              env:
+                - name: DB_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: clinic-scheduler-secrets
+                      key: DB_PASSWORD
+              volumeMounts:
+                - name: backup-storage
+                  mountPath: /backup
+              resources:
+                requests:
+                  memory: "256Mi"
+                  cpu: "100m"
+                limits:
+                  memory: "512Mi"
+                  cpu: "500m"
+          restartPolicy: OnFailure
+          volumes:
+            - name: backup-storage
+              emptyDir: {}
+              # For production, use a PersistentVolume or cloud storage:
+              # persistentVolumeClaim:
+              #   claimName: backup-pvc
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1

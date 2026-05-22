@@ -286,6 +286,28 @@ docker compose down -v                # Tear down everything including DB volume
 - Grafana default password: `admin` (set `GRAFANA_PASSWORD` to change).
 - Promtail scrapes Docker container logs and forwards to Loki.
 
+### PgBouncer (Phase 9)
+- `edoburu/pgbouncer:latest` (v1.25.1) in transaction pooling mode
+- Port mapping: `6432:5432` (host:container). Internal Docker network: `pgbouncer:5432`
+- **asyncpg compatibility**: asyncpg uses SCRAM-SHA-256 by default, which is incompatible with PgBouncer transaction pooling. Workers connect directly to `db:5432` instead.
+- PostgreSQL `pg_hba.conf` uses `md5` authentication (not `scram-sha-256`)
+- Password encryption set to `md5` via `ALTER SYSTEM SET password_encryption = 'md5'`
+- Reserved for synchronous clients (e.g., migration scripts, admin tools)
+
+### Redis AOF (Phase 9)
+- `appendonly yes` enabled for persistence
+- JWT deny-list and metrics survive Redis restarts
+
+### Kubernetes (Phase 9)
+- 11 manifests in `k8s/` directory
+- Apply: `kubectl apply -f k8s/`
+- Dry-run: `kubectl apply -f k8s/ --dry-run=client`
+
+### Disaster Recovery (Phase 9)
+- Runbook: `app/docs/Disaster_Recovery_Runbook.md`
+- Docker Compose backup: `docker compose exec db pg_dump -U clinic clinic_db > backup.sql`
+- Kubernetes backup: `kubectl apply -f k8s/cronjob-backup.yaml`
+
 ## Dev Commands
 
 ```bash

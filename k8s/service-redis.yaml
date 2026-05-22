@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: clinic-redis
+  namespace: clinic-scheduler
+  labels:
+    app: clinic-redis
+spec:
+  type: ClusterIP
+  selector:
+    app: clinic-redis
+  ports:
+    - port: 6379
+      targetPort: 6379
+      protocol: TCP
+      name: redis

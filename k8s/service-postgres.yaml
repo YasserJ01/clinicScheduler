@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: clinic-postgres
+  namespace: clinic-scheduler
+  labels:
+    app: clinic-postgres
+spec:
+  type: ClusterIP
+  selector:
+    app: clinic-postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+      protocol: TCP
+      name: postgres
