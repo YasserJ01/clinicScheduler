@@ -5,17 +5,35 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 
+_ENV_PATH = pathlib.Path(__file__).resolve().parents[2] / ".env"
+
+
 def _get_secret_key() -> str:
     key = os.getenv("SECRET_KEY", "")
     if key:
         return key
-    env_path = pathlib.Path(__file__).resolve().parents[2] / ".env"
-    if env_path.exists():
-        for line in env_path.read_text().splitlines():
+    if _ENV_PATH.exists():
+        for line in _ENV_PATH.read_text().splitlines():
             line = line.strip()
             if line.startswith("SECRET_KEY="):
                 return line.split("=", 1)[1]
     return "change-me-in-production"
+
+
+def _get_db_port() -> int:
+    port = os.getenv("TEST_DB_PORT", "")
+    if port:
+        return int(port)
+    db_url = os.getenv("DATABASE_URL", "")
+    if db_url:
+        import re
+
+        m = re.search(r":(\d+)/", db_url)
+        if m:
+            return int(m.group(1))
+    if _ENV_PATH.exists():
+        return 5433
+    return 5432
 
 
 class TestUserPatientLink:
@@ -121,7 +139,7 @@ class TestDoctorLink:
             user="clinic",
             password="clinicpass",
             host="localhost",
-            port=5433,
+            port=_get_db_port(),
             database="clinic_db",
         )
         try:
