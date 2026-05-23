@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, text
-from app.db.session import get_db, get_read_db
+from app.db.session import get_read_db
 from app.db.repository import AppointmentRepository, PatientRepository, DoctorRepository
 from app.api.v1.dependencies import get_current_user
 from app.models import Appointment, Patient, Doctor, AuditLog, AppointmentStatus
