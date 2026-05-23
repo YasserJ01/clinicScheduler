@@ -157,6 +157,9 @@ class Appointment(Base):
     )
     next_reminder_at = Column(DateTime, nullable=True)
     reminder_sent = Column(Boolean, nullable=False, default=False)
+    cancellation_reason = Column(String(500), nullable=True)
+    cancelled_at = Column(DateTime, nullable=True)
+    cancelled_by = Column(String(100), nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
     doctor = relationship("Doctor", back_populates="appointments")

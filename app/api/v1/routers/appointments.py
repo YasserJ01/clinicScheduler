@@ -482,6 +482,7 @@ async def get_available_slots(
 
 class StatusUpdate(BaseModel):
     status: str
+    cancellation_reason: str | None = None
 
 
 @router.patch("/{appointment_id}/status")
@@ -544,16 +545,26 @@ async def update_appointment_status(
     if not updated:
         raise HTTPException(status_code=404, detail="Appointment not found")
 
+    if new_status == AppointmentStatus.CANCELLED:
+        updated.cancellation_reason = req.cancellation_reason
+        updated.cancelled_at = datetime.utcnow()
+        updated.cancelled_by = username
+        await db.flush()
+
+    details = {
+        "old_status": appt.status.value,
+        "new_status": new_status.value,
+    }
+    if new_status == AppointmentStatus.CANCELLED:
+        details["cancellation_reason"] = req.cancellation_reason
+
     await audit_log(
         db,
         actor=username,
         action="update_appointment_status",
         entity_type="appointment",
         entity_id=appointment_id,
-        details={
-            "old_status": appt.status.value,
-            "new_status": new_status.value,
-        },
+        details=details,
     )
 
     patient_repo = PatientRepository(db)
