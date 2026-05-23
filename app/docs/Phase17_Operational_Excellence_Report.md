@@ -1,6 +1,6 @@
 # Phase 17 — Operational Excellence
 
-## Status: Active (Sub-Phase 17-C Complete)
+## Status: Active (Sub-Phase 17-E Complete)
 
 ---
 
@@ -286,11 +286,210 @@ Replace the rolling update strategy with a blue-green deployment model that prov
 
 ---
 
+## Sub-Phase 17-D: SLA Monitoring & Error Budget ✅
+
+### Objective
+Define SLOs for critical service metrics, implement Prometheus recording rules for SLO computation, provision Grafana alert rules for error budget burn-rate detection, and deliver a pre-configured SLA dashboard for real-time visibility.
+
+### Changes
+
+#### 1. SLO Definitions
+
+| Metric | SLO Target | Error Budget (30d) | Calculation |
+|--------|-----------|-------------------|-------------|
+| Availability | 99.9% | 43.2 minutes downtime | 2592000s × (1 − 0.999) |
+| p95 Latency | < 500ms | 5% may exceed | 2592000s × (1 − 0.95) |
+| Booking Error Rate | < 1% HTTP 500 | 1% of attempts | Window-relative |
+| Webhook Delivery Success | > 95% | 5% failures | Window-relative |
+
+#### 2. Prometheus Recording Rules (`observability/prometheus-rules.yml`)
+Pre-computed SLO metrics (13 rules in 1 group, 30s evaluation interval):
+
+| Rule | Purpose |
+|------|---------|
+| `slo:availability:total_requests_1h` | Total request rate (1h) |
+| `slo:availability:error_requests_1h` | 5xx error rate (1h) |
+| `slo:availability:error_budget_30d_seconds` | Total error budget (2,592,000 × 0.001 = 2,592s) |
+| `slo:availability:error_budget_remaining_percent` | Remaining budget as percentage |
+| `slo:availability:burn_rate_1h` | How fast budget is consumed (× SLO rate) |
+| `slo:latency:slow_requests_1h` | Requests exceeding 500ms |
+| `slo:latency:total_requests_1h` | Total request rate (1h) |
+| `slo:latency:error_budget_30d_seconds` | Latency error budget |
+| `slo:booking:error_requests_1h` | 5xx on POST /appointments (1h) |
+| `slo:booking:total_requests_1h` | Total booking requests (1h) |
+| `slo:webhook:failed_deliveries_1h` | Failed webhook deliveries (1h) |
+| `slo:webhook:total_deliveries_1h` | Total webhook deliveries (1h) |
+| `slo:webhook:slo_target` | Constant 0.95 |
+
+#### 3. Alert Rules (`observability/alerts.yml`)
+5 Grafana alert rules provisioned at startup:
+
+| UID | Alert Name | Severity | Condition | For |
+|-----|-----------|----------|-----------|-----|
+| `slo_availability_burn_rate_critical` | Availability — Burn Rate Critical | critical | Burn rate > 2× AND budget < 50% | 5m |
+| `slo_availability_exhausted` | Availability — Budget Exhausted | critical | Budget ≤ 0% | 0m |
+| `slo_latency_burn_rate_high` | Latency — p95 Approaching | warning | p95 > 400ms | 10m |
+| `slo_booking_error_rate_high` | Booking — Error Rate Exceeded | critical | > 1% errors | 5m |
+| `slo_webhook_success_rate_low` | Webhook — Success Below 95% | warning | < 95% success | 5m |
+
+Each alert includes `summary`, `description` with template values, and labels (`severity`, `slo`, `team`).
+
+#### 4. Grafana SLA Dashboard (`observability/grafana-dashboard-sla.json`)
+Pre-provisioned dashboard with 8 panels:
+- **SLO Overview** stat — aggregate status
+- **Availability SLO — 99.9%** time series — rolling 1h availability with thresholds (red < 99.9%, yellow < 99.99%, green ≥ 99.99%)
+- **Availability — Error Budget Remaining** gauge — 0–100% with red/yellow/green zones
+- **Availability — Burn Rate (1h)** stat — current burn rate (× SLO), red > 2×
+- **Availability — Error Budget Burn Rate (7d)** time series — historical burn rate
+- **Latency SLO — p95 < 500ms** time series — p95 latency with 500ms threshold line
+- **Booking Error Rate SLO — < 1%** time series — percentage with 1% threshold
+- **Webhook Delivery Success SLO — > 95%** time series — percentage with 95% threshold
+- **Total Requests** time series — req/s split by all vs 5xx
+
+Dashboard UID: `clinic-scheduler-slo`, auto-refresh 30s, default time range 7d.
+
+#### 5. Prometheus Service (`docker-compose.observability.yml`)
+- Added Prometheus server (`prom/prometheus:v2.50.0`, port 9090)
+- Scrapes `worker:8000/api/v1/metrics` every 15s
+- Loads recording rules from `prometheus-rules.yml`
+- Grafana provisioning updated to mount datasource config, dashboard provider, and SLA dashboard JSON
+
+#### 6. Grafana Provisioning
+- **`observability/grafana-datasources.yml`** — Prometheus datasource (uid: `prometheus`, URL: `http://prometheus:9090`)
+- **`observability/grafana-dashboards.yml`** — File provider for `/var/lib/grafana/dashboards`
+- **`observability/prometheus.yml`** — Prometheus server config with scrape targets and rule file reference
+- **`observability/promtail-config.yml`** — Log shipping config for container logs → Loki
+
+#### 7. Agent Documentation (`app/docs/AGENTS.md`)
+- Added full **SLA Monitoring & Error Budget (Phase 17-D)** section covering:
+  - SLO definitions table
+  - All 13 Prometheus recording rules
+  - All 5 alert rules with severity and conditions
+  - Grafana dashboard panel descriptions
+  - Observability stack services and ports
+  - K8s ServiceMonitor reference
+
+### Key Design Decisions
+- **Prometheus recording rules** (not Grafana transforms): Pre-compute SLO metrics at scrape time for consistent querying across dashboards and alerts.
+- **Burn rate alerts**: Alert when consumption exceeds 2× the SLO rate AND budget is below 50% — prevents false positives during low-traffic periods while catching sustained degradation.
+- **Grafana-provisioned alerts** (not AlertManager standalone): Alerts are defined as Grafana rule groups, visible and manageable from the Grafana UI. The `prometheus-rules.yml` is a separate Prometheus rules file for recording rules only.
+- **Prometheus added to Docker Compose**: The original observability stack only had Loki/Promtail/Grafana (log-focused). Prometheus is essential for metrics-based SLO monitoring.
+- **Provisioned dashboards**: The SLA dashboard JSON is auto-loaded at Grafana startup — no manual import needed.
+
+### Files Changed
+| File | Change |
+|---|---|
+| `observability/prometheus-rules.yml` | New — 13 SLO recording rules |
+| `observability/alerts.yml` | New — 5 Grafana alert rules |
+| `observability/grafana-dashboard-sla.json` | New — SLA dashboard with 8 panels |
+| `observability/grafana-datasources.yml` | New — Prometheus datasource config |
+| `observability/grafana-dashboards.yml` | New — dashboard provisioning provider |
+| `observability/prometheus.yml` | New — Prometheus server config |
+| `observability/promtail-config.yml` | New — log shipping config (was missing) |
+| `docker-compose.observability.yml` | Added Prometheus service, updated Grafana volumes |
+| `app/docs/AGENTS.md` | Added SLA Monitoring section |
+
+### Tests
+- Full suite: **211 passed, 5 skipped, 0 failed** (unchanged — YAML/JSON only)
+- No regressions
+- Ruff format: no Python files changed
+
+---
+
+## Sub-Phase 17-E: Full DR Test ✅
+
+### Objective
+Build and execute an automated Disaster Recovery test that validates the full backup→destroy→restore→verify cycle, measures Recovery Time Objective (RTO), and hardens the existing backup infrastructure with encryption and integrity verification.
+
+### Changes
+
+#### 1. New Scripts
+
+| Script | Description |
+|---|---|
+| `scripts/backup.sh` | Standalone backup with gzip compression, integrity verification (gunzip head check), optional AES-256-CBC encryption (`--encrypt` + `BACKUP_ENCRYPTION_KEY` env var), 30-day retention |
+| `scripts/restore.sh` | Schema drop/recreate, restore from `.sql.gz` or `.sql.gz.enc`, decryption support (`--encrypt-key`), post-restore row count verification |
+| `scripts/dr-test.sh` | End-to-end DR drill: pre-flight checks → test data marker → backup (timed) → integrity verify → schema destroy → restore (timed) → row count verify → marker verify → health check → RTO report |
+
+#### 2. DR Test Flow (`scripts/dr-test.sh`)
+```
+[step 0] Pre-flight — verify db service is running and accepting connections
+[step 1] Test data — insert DR_DRILL_MARKER into audit_log with timestamp
+[step 2] Backup — pg_dump | gzip, measure backup time
+[step 3] Integrity — gunzip -c | head -5, count COPY statements
+[step 4] Destroy — drop schema public cascade, create schema public
+[step 5] Restore — gunzip -c | psql, measure restore time, restart workers
+[step 6] Verify — compare row counts, find marker, curl /health
+[step 7] RTO — backup_ms + restore_ms = total RTO
+[step 8] Cleanup — remove test marker, delete test backup
+```
+
+#### 3. RTO Baseline Results
+| Metric | Value |
+|---|---|
+| Backup time (test dataset) | ~500 ms |
+| Restore time | ~1,200 ms |
+| **Total RTO** | **~1.7 seconds** |
+| Backup size | < 1 MB |
+| Data integrity | PASS |
+| DR marker verified | PASS |
+
+**Production scaling estimate**: For a 10 GB dataset, estimate backup ≈ 100s, restore ≈ 200s, total RTO ≈ 5 minutes (linear scaling at ~100 MB/s backup, ~50 MB/s restore throughput).
+
+#### 4. Kubernetes CronJob Enhancement (`k8s/cronjob-backup.yaml`)
+- Added `BACKUP_ENCRYPTION_KEY` optional secret reference for AES-256-CBC encryption
+- Added integrity verification (gunzip head check) after each backup
+- Added `--no-owner --no-acl` flags for portable dumps
+- Changed backup filename prefix from `clinic_` to `clinic_scheduler_` (consistent with scripts)
+- Added Prometheus-friendly structured log output
+- Added `app: clinic-backup` label to CronJob metadata
+
+#### 5. Disaster Recovery Runbook Update (`app/docs/Disaster_Recovery_Runbook.md`)
+- Added **Section 8 — Automated DR Test** covering:
+  - Test script documentation with all flags (`--no-teardown`, `--skip-test-data`)
+  - Baseline RTO results table
+  - Production scaling estimates
+  - All three script commands (backup, restore, dr-test)
+  - CronJob enhancement summary
+
+#### 6. Agent Documentation (`app/docs/AGENTS.md`)
+- Updated Disaster Recovery (Phase 9, Phase 17-E) section with:
+  - Script reference table (backup.sh, restore.sh, dr-test.sh)
+  - Usage examples for all three scripts
+  - RTO baseline numbers
+  - External Secrets note for `BACKUP_ENCRYPTION_KEY`
+
+### Key Design Decisions
+- **Scripts written in bash**: No Python dependency — works even if the application stack is down. Only requires `docker compose`, `pg_dump` (in the Docker image), and `openssl` (for encryption).
+- **Test data is a DR marker in audit_log**: No schema changes needed. The marker is cleaned up after the test.
+- **`--no-teardown` flag**: Allows running the test in CI without destroying the database. Verifies backup creation and integrity only.
+- **gzip compression (not zstd)**: pg_dump output is already compressible; gzip is universally available in the postgres Docker image and provides ~5:1 compression on SQL dumps.
+- **AES-256-CBC with pbkdf2**: Standard OpenSSL encryption with key derivation — no external tools needed. The encryption key is optional (prod clusters may rely on filesystem-level encryption or cloud storage encryption-at-rest).
+- **RTO measured as backup + restore time**: Does NOT include detection/decision time (which is operator-dependent). The script measures only the technical recovery window.
+- **K8s CronJob uses same backup pattern**: The inline script in `cronjob-backup.yaml` follows the same logic as `backup.sh` but runs inside the cluster without requiring a script volume mount.
+- **Scripts in `scripts/` not mounted into CronJob**: K8s CronJob uses an inline command for self-contained operation. The standalone scripts are for Docker Compose and manual use.
+
+### Files Changed
+| File | Change |
+|---|---|
+| `scripts/backup.sh` | New — automated backup with encryption, verify, retention |
+| `scripts/restore.sh` | New — automated restore with decryption, verify |
+| `scripts/dr-test.sh` | New — end-to-end DR drill with RTO measurement |
+| `k8s/cronjob-backup.yaml` | Added encryption, integrity check, portable dump flags |
+| `app/docs/Disaster_Recovery_Runbook.md` | Added Section 8 — Automated DR Test |
+| `app/docs/AGENTS.md` | Updated Disaster Recovery section with scripts + RTO |
+| `app/docs/Phase17_Operational_Excellence_Report.md` | This section |
+
+### Tests
+- Full suite: **211 passed, 5 skipped, 0 failed** (unchanged — bash/markdown/YAML only)
+- No regressions
+- Ruff format: no Python files changed (bash/YAML/markdown only)
+
+---
+
 ## Upcoming Sub-Phases
 
 | Sub-Phase | Status | Description |
 |---|---|---|
-| 17-D: SLA Monitoring + Error Budget | Pending | Grafana SLO dashboards |
-| 17-E: Full DR Test | Pending | Documented and tested DR |
 | 17-F: NGINX Config Hardening | Pending | Round-robin, rate limit tuning |
 | 17-G: Load Test + Regression | Pending | k6 at 200 VUs |

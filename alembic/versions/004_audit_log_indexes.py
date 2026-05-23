@@ -4,6 +4,7 @@ Revision ID: 004_audit_log_indexes
 Revises: 003_fix_doctor_is_active_boolean
 Create Date: 2026-05-21
 """
+
 from alembic import op
 
 revision = "004_audit_log_indexes"

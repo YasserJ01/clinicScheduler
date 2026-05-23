@@ -4,6 +4,7 @@ Revision ID: 006
 Revises: 005
 Create Date: 2026-05-22
 """
+
 from alembic import op
 import sqlalchemy as sa
 
@@ -22,7 +23,9 @@ def upgrade():
         sa.Column("start_time", sa.Time, nullable=False),
         sa.Column("end_time", sa.Time, nullable=False),
         sa.Column("is_active", sa.Boolean, nullable=False, server_default="true"),
-        sa.Column("created_at", sa.DateTime, nullable=False, server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime, nullable=False, server_default=sa.func.now()
+        ),
         sa.UniqueConstraint("doctor_id", "day_of_week"),
     )
     op.create_index("ix_doctor_schedules_doctor_id", "doctor_schedules", ["doctor_id"])

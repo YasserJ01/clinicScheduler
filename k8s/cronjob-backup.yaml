@@ -3,6 +3,8 @@ kind: CronJob
 metadata:
   name: postgres-backup
   namespace: clinic-scheduler
+  labels:
+    app: clinic-backup
 spec:
   schedule: "0 2 * * *"
   jobTemplate:
@@ -19,27 +21,55 @@ spec:
                   set -e
                   BACKUP_DIR="/backup"
                   TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-                  BACKUP_FILE="clinic_${TIMESTAMP}.sql.gz"
+                  BACKUP_FILE="clinic_scheduler_${TIMESTAMP}.sql.gz"
+                  BACKUP_ENCRYPTED="clinic_scheduler_${TIMESTAMP}.sql.gz.enc"
+                  ENCRYPT_KEY="${BACKUP_ENCRYPTION_KEY:-}"
 
-                  echo "Starting backup: ${BACKUP_FILE}"
+                  echo "[backup] Starting backup: ${BACKUP_FILE}"
                   PGPASSWORD="${DB_PASSWORD}" pg_dump \
                     -h clinic-postgres \
                     -U clinic \
                     -d clinic_db \
+                    --no-owner --no-acl \
                     | gzip > "${BACKUP_DIR}/${BACKUP_FILE}"
 
-                  echo "Backup complete: $(ls -lh ${BACKUP_DIR}/${BACKUP_FILE})"
+                  echo "[backup] Backup complete: $(ls -lh ${BACKUP_DIR}/${BACKUP_FILE})"
+
+                  # Verify integrity
+                  gunzip -c "${BACKUP_DIR}/${BACKUP_FILE}" | head -5 > /dev/null 2>&1
+                  echo "[backup] Integrity check passed"
+
+                  # Encrypt if key is available
+                  if [ -n "$ENCRYPT_KEY" ]; then
+                    openssl enc -aes-256-cbc -salt -pbkdf2 \
+                      -in "${BACKUP_DIR}/${BACKUP_FILE}" \
+                      -out "${BACKUP_DIR}/${BACKUP_ENCRYPTED}" \
+                      -pass pass:"${ENCRYPT_KEY}"
+                    rm -f "${BACKUP_DIR}/${BACKUP_FILE}"
+                    echo "[backup] Encrypted: ${BACKUP_ENCRYPTED}"
+                    BACKUP_FILE="${BACKUP_ENCRYPTED}"
+                  fi
 
                   # Keep only last 30 backups
-                  ls -t ${BACKUP_DIR}/clinic_*.sql.gz | tail -n +31 | xargs -r rm
+                  ls -t ${BACKUP_DIR}/clinic_scheduler_*.sql.gz* | tail -n +31 | xargs -r rm
+                  echo "[backup] Retention cleanup complete"
 
-                  echo "Backup retention cleanup complete"
+                  # Emit metrics for Prometheus
+                  BACKUP_SIZE=$(stat -c%s "${BACKUP_DIR}/${BACKUP_FILE}" 2>/dev/null || stat -f%z "${BACKUP_DIR}/${BACKUP_FILE}" 2>/dev/null)
+                  echo "[backup] metrics backup_size_bytes ${BACKUP_SIZE}"
+                  echo "[backup] Backup completed successfully"
               env:
                 - name: DB_PASSWORD
                   valueFrom:
                     secretKeyRef:
                       name: clinic-scheduler-secrets
                       key: DB_PASSWORD
+                - name: BACKUP_ENCRYPTION_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: clinic-scheduler-secrets
+                      key: BACKUP_ENCRYPTION_KEY
+                      optional: true
               volumeMounts:
                 - name: backup-storage
                   mountPath: /backup

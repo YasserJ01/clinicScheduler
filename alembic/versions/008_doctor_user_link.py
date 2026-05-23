@@ -4,6 +4,7 @@ Revision ID: 008
 Revises: 007
 Create Date: 2026-05-22
 """
+
 from alembic import op
 import sqlalchemy as sa
 
@@ -14,7 +15,10 @@ depends_on = None
 
 
 def upgrade():
-    op.add_column("doctors", sa.Column("user_id", sa.Integer, sa.ForeignKey("users.id"), nullable=True))
+    op.add_column(
+        "doctors",
+        sa.Column("user_id", sa.Integer, sa.ForeignKey("users.id"), nullable=True),
+    )
     op.create_unique_constraint("uq_doctors_user_id", "doctors", ["user_id"])
     op.create_index("ix_doctors_user_id", "doctors", ["user_id"])
 

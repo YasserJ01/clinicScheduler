@@ -18,6 +18,23 @@ services:
       - clinic-net
     restart: unless-stopped
 
+  prometheus:
+    image: prom/prometheus:v2.50.0
+    ports:
+      - "9090:9090"
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
+      - "--web.enable-lifecycle"
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/prometheus-rules.yml:/etc/prometheus/rules.yml:ro
+    networks:
+      - clinic-net
+    restart: unless-stopped
+
   grafana:
     image: grafana/grafana:10.0.0
     ports:
@@ -26,6 +43,9 @@ services:
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
     volumes:
       - ./observability/alerts.yml:/etc/grafana/provisioning/alerting/alerts.yml:ro
+      - ./observability/grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
+      - ./observability/grafana-dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:ro
+      - ./observability/grafana-dashboard-sla.json:/var/lib/grafana/dashboards/sla-dashboard.json:ro
     networks:
       - clinic-net
     restart: unless-stopped

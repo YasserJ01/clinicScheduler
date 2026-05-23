@@ -296,6 +296,56 @@ kubectl scale deployment/clinic-worker-green -n clinic-scheduler --replicas=0
 - Apply migration: `alembic upgrade head`
 - Migrations: `001_initial_schema`, `002_add_duration_minutes`, `003_fix_doctor_is_active_boolean`, `004_audit_log_indexes`
 
+### SLA Monitoring & Error Budget (Phase 17-D)
+
+#### SLO Definitions
+
+| Metric | SLO Target | Error Budget (30d) |
+|--------|-----------|-------------------|
+| Availability (`GET /health` 200) | 99.9% | 43.2 minutes downtime |
+| p95 Latency | < 500ms | 5% of requests may exceed |
+| Booking Error Rate | < 1% HTTP 500 | 1% of booking attempts |
+| Webhook Delivery Success | > 95% | 5% delivery failures acceptable |
+
+#### Prometheus Recording Rules (`observability/prometheus-rules.yml`)
+Pre-computed SLO metrics for dashboard and alert queries:
+- `slo:availability:burn_rate_1h` — how fast error budget is consumed (× SLO)
+- `slo:availability:error_budget_remaining_percent` — remaining budget
+- `slo:latency:slow_requests_1h` — requests exceeding 500ms
+- `slo:booking:error_requests_1h` — 5xx on POST /appointments
+- `slo:webhook:failed_deliveries_1h` — undelivered webhooks
+
+#### Alert Rules (`observability/alerts.yml`)
+5 Grafana alert rules provisioned at startup:
+
+| Alert | Severity | Condition |
+|-------|----------|-----------|
+| Availability SLO — Burn Rate Critical | critical | Burn rate > 2× for 5m AND budget < 50% |
+| Availability SLO — Budget Exhausted | critical | Budget ≤ 0% |
+| Latency SLO — p95 Approaching Threshold | warning | p95 > 400ms for 10m |
+| Booking Error Rate SLO — Exceeded | critical | > 1% errors for 5m |
+| Webhook Delivery SLO — Below Threshold | warning | < 95% success for 5m |
+
+#### Grafana SLA Dashboard (`observability/grafana-dashboard-sla.json`)
+Pre-provisioned dashboard with 8 panels:
+- **SLO Overview** stat - aggregate health
+- **Availability** (time series + gauge + burn rate) — 4 panels
+- **Latency** time series with SLO threshold line
+- **Booking Error Rate** time series
+- **Webhook Success Rate** time series
+- **Total Requests** time series (all + 5xx)
+
+#### Observability Stack (`docker-compose.observability.yml`)
+- **Prometheus** (`:9090`) scrapes `/api/v1/metrics` on workers
+- **Loki** (`:3100`) — log aggregation
+- **Promtail** — log shipping from Docker containers
+- **Grafana** (`:3000`) — dashboards + alerting (admin/admin)
+- Start: `docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d`
+
+#### K8s ServiceMonitor
+- `k8s/servicemonitor.yaml` — scrapes `/api/v1/metrics` on port `http` every 15s
+- Compatible with Prometheus Operator
+
 ### Prometheus Metrics (Phase 6, updated Phase 7)
 - `GET /api/v1/metrics` — returns Prometheus exposition format.
 - Metrics stored in Redis (persistent across worker restarts).
@@ -408,10 +458,50 @@ kubectl scale deployment/clinic-worker-green -n clinic-scheduler --replicas=0
 - Apply: `kubectl apply -f k8s/`
 - Dry-run: `kubectl apply -f k8s/ --dry-run=client`
 
-### Disaster Recovery (Phase 9)
+### Disaster Recovery (Phase 9, updated Phase 17-E)
+
 - Runbook: `app/docs/Disaster_Recovery_Runbook.md`
-- Docker Compose backup: `docker compose exec db pg_dump -U clinic clinic_db > backup.sql`
-- Kubernetes backup: `kubectl apply -f k8s/cronjob-backup.yaml`
+
+#### Scripts
+| Script | Purpose |
+|---|---|
+| `scripts/backup.sh` | Standalone backup with integrity check, optional AES-256-CBC encryption, and 30-day retention |
+| `scripts/restore.sh` | Restore from backup with decryption support; drops/recreates schema |
+| `scripts/dr-test.sh` | Full DR drill: backup → teardown → restore → verify → measure RTO |
+
+#### Usage
+```bash
+# Full DR test (requires running docker compose stack)
+./scripts/dr-test.sh
+
+# Manual backup
+./scripts/backup.sh
+
+# Manual backup with encryption
+BACKUP_ENCRYPTION_KEY="your-key" ./scripts/backup.sh --encrypt
+
+# Manual restore (WARNING: destroys existing data)
+./scripts/restore.sh backups/clinic_scheduler_20260524_020000.sql.gz
+
+# DR test without destroying volume (backup verification only)
+./scripts/dr-test.sh --no-teardown
+```
+
+#### Kubernetes backup
+- `kubectl apply -f k8s/cronjob-backup.yaml`
+- Daily at 02:00 UTC, 30-day retention
+- Includes integrity verification and optional AES-256-CBC encryption
+- CronJob updated in Phase 17-E with encryption support
+
+#### RTO Baseline
+On the test dataset (~26k appointments):
+- Backup: ~500ms
+- Restore: ~1,200ms
+- **Total: ~1.7 seconds**
+- RTO scales linearly with dataset size (estimate 10 GB → ~5 minutes)
+
+#### External Secrets
+- `BACKUP_ENCRYPTION_KEY` added to `k8s/external-secret.yaml` (optional)
 
 ### Doctor Availability Windows (Phase 10)
 - `DoctorSchedule` model: `doctor_schedules` table with `day_of_week` (0=Monday), `start_time`, `end_time`

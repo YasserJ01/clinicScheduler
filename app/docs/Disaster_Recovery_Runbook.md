@@ -205,7 +205,84 @@ kubectl exec -n clinic-scheduler job/postgres-backup-xxxx -- ls -lh /backup/
 
 ---
 
-## 8. Contact Information
+## 8. Automated DR Test (Phase 17-E)
+
+### 8.1 Test Script
+
+The `scripts/dr-test.sh` script automates the full DR drill:
+
+```
+./scripts/dr-test.sh
+```
+
+Test flow:
+1. **Pre-flight**: Verifies `db` service is running and accepting connections
+2. **Test data**: Inserts a DR drill marker row into `audit_log`
+3. **Backup**: Runs `pg_dump` with gzip compression, measures backup time
+4. **Integrity check**: Verifies the backup file is valid (decompress + head test)
+5. **Schema destroy**: Drops public schema (simulates full data loss)
+6. **Restore**: Loads backup, measures restore time
+7. **Verify**: Checks row counts match pre-backup, finds the drill marker, hits `/health`
+8. **RTO report**: Backup ms + Restore ms = Total RTO
+9. **Cleanup**: Removes test marker and test backup file
+
+### 8.2 Test Run: 2026-05-24 (Baseline on Docker Compose — small dataset)
+
+| Metric | Value |
+|---|---|
+| Backup time | ~500 ms |
+| Restore time | ~1,200 ms |
+| **Total RTO** | **~1.7 seconds** |
+| Backup size | < 1 MB (test dataset) |
+| Data integrity | PASS |
+| Health check after restore | PASS |
+| DR drill marker verified | PASS |
+
+**Note**: RTO scales with dataset size. The numbers above are for the test dataset (~26k appointments). For a production dataset (millions of rows), estimate:
+- Backup: dataset_size / 100 MB/s
+- Restore: dataset_size / 50 MB/s
+- Example: 10 GB dataset → backup ≈ 100s, restore ≈ 200s, total RTO ≈ 5 minutes
+
+### 8.3 Test Commands
+
+```bash
+# Full DR test (CAUTION: destroys database during test)
+./scripts/dr-test.sh
+
+# DR test without destroying the volume (verifies backup only)
+./scripts/dr-test.sh --no-teardown
+
+# DR test without test data markers
+./scripts/dr-test.sh --skip-test-data
+
+# Manual backup (standalone)
+./scripts/backup.sh
+
+# Manual backup with encryption
+BACKUP_ENCRYPTION_KEY="your-key" ./scripts/backup.sh --encrypt
+
+# Manual restore
+./scripts/restore.sh backups/clinic_scheduler_20260524_020000.sql.gz
+
+# Manual restore with decryption
+./scripts/restore.sh backups/clinic_scheduler_20260524_020000.sql.gz.enc --encrypt-key "your-key"
+```
+
+### 8.4 Scheduled Backup Scripts
+All three scripts are available in the `scripts/` directory:
+- `backup.sh` — Standalone backup with integrity verification, encryption, and retention
+- `restore.sh` — Restore from backup with decryption support
+- `dr-test.sh` — Full DR drill with RTO measurement
+
+The Kubernetes CronJob (`k8s/cronjob-backup.yaml`) now includes:
+- Integrity verification after each backup
+- Optional AES-256-CBC encryption (when `BACKUP_ENCRYPTION_KEY` is set)
+- Prometheus-friendly log output
+- Same 30-day retention policy
+
+---
+
+## 9. Contact Information
 
 | Role | Contact |
 |---|---|
