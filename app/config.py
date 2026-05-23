@@ -22,6 +22,7 @@ class Settings(BaseSettings):
 
     POOL_SIZE: int = 15
     MAX_OVERFLOW: int = 5
+    READ_DATABASE_URL: str = ""
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

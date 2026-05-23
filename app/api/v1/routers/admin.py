@@ -6,7 +6,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.db.session import get_db
+from app.db.session import get_db, get_read_db
 from app.db.repository import PatientRepository, AppointmentRepository
 from app.api.v1.dependencies import get_current_user
 from app.core.audit import audit_log
@@ -87,7 +87,7 @@ async def _patient_ndjson(patient_id: int, db: AsyncSession):
 async def export_patient_data(
     patient_id: int,
     current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_read_db),
 ):
     """Export a patient's personal data as NDJSON (GDPR Article 20)."""
     _require_admin(current_user)
@@ -207,7 +207,7 @@ async def list_webhooks(
     page: int = 1,
     page_size: int = 20,
     current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_read_db),
 ):
     _require_admin(current_user)
     tenant_id = current_user.get("tenant_id")
@@ -256,7 +256,7 @@ async def list_webhooks(
 async def get_webhook(
     webhook_id: int,
     current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_read_db),
 ):
     _require_admin(current_user)
     tenant_id = current_user.get("tenant_id")
@@ -357,7 +357,7 @@ async def list_webhook_deliveries(
     page: int = 1,
     page_size: int = 20,
     current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_read_db),
 ):
     _require_admin(current_user)
     tenant_id = current_user.get("tenant_id")
@@ -487,7 +487,7 @@ async def list_tenants(
     page: int = 1,
     page_size: int = 20,
     current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_read_db),
 ):
     _require_superadmin(current_user)
 
@@ -527,7 +527,7 @@ async def list_tenants(
 async def get_tenant(
     tenant_id: int,
     current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_read_db),
 ):
     _require_superadmin(current_user)
 
@@ -712,7 +712,7 @@ async def list_api_keys(
     page: int = 1,
     page_size: int = 20,
     current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_read_db),
 ):
     _require_admin(current_user)
     tenant_id = current_user.get("tenant_id")

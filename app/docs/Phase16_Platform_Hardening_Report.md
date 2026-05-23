@@ -1,6 +1,6 @@
 # Phase 16 — Platform Hardening
 
-## Status: Active (Sub-Phase 16-E Complete)
+## Status: Complete
 
 ---
 
@@ -298,8 +298,61 @@ Provide machine-to-machine API key authentication as a fallback to JWT-based aut
 
 ---
 
-## Upcoming Sub-Phases
+## Sub-Phase 16-D: PostgreSQL Row-Level Security ✅
 
-| Sub-Phase | Status | Description |
-|---|---|---|
-| 16-D: PostgreSQL RLS | Pending | Row-level security policies |
+### Objective
+Enforce tenant data isolation at the database level using PostgreSQL Row-Level Security (RLS), ensuring that queries from one tenant cannot see another tenant's rows even if application-level filtering fails.
+
+### Changes
+
+#### 1. RLS Setup (`app/db/session.py`)
+- `_enable_rls()` function called in a **separate transaction** after `init_db()` to survive `InFailedSQLTransactionError` from preceding `ALTER TYPE` / `CREATE INDEX` calls
+- Each `ALTER TABLE ENABLE ROW LEVEL SECURITY` / `CREATE POLICY` wrapped in `begin_nested()` (savepoints) — prevents one failed statement from aborting the entire RLS transaction
+
+#### 2. RLS Policies
+- **tenant_isolation** policy on 11 tables: `tenants`, `users`, `doctors`, `patients`, `appointments`, `audit_log`, `recurring_series`, `webhooks`, `webhook_deliveries`, `doctor_schedules`, `api_keys`
+  - Uses `COALESCE(nullif(current_setting('app.current_tenant_id', true), ''), '-1')::int = tenant_id`
+  - Defaults to `-1` (returns no rows) when no tenant context is set
+- **superadmin_bypass** policy on all 11 tables:
+  - Uses `current_setting('app.current_user_role', true) = 'superadmin'`
+  - Allows superadmins to see all rows across all tenants
+
+#### 3. Context Variables (`app/db/session.py`)
+- `_tenant_ctx = ContextVar('tenant_id', default=None)`, `_role_ctx = ContextVar('role', default=None)`
+- `set_rls_context(tenant_id=..., role=...)` — sets contextvar values
+- `get_db()` reads contextvars and applies `SET LOCAL app.current_tenant_id` and `SET LOCAL app.current_user_role` before yielding each session
+- Only sets parameters that have a non-None contextvar value
+
+#### 4. Tenant Middleware (`app/core/tenant_middleware.py`)
+- Calls `set_rls_context(tenant_id=...)` when `X-Tenant-ID` header is present
+
+#### 5. Auth Dependencies (`app/api/v1/dependencies.py`)
+- `get_current_user()` calls `set_rls_context(role=...)` after successful JWT decode
+- `_get_api_key_user()` calls `set_rls_context(role=...)` after successful API key verification
+
+#### 6. Migration (`alembic/versions/018_enable_rls.py`)
+- Enables RLS on all 11 tenant-scoped tables
+- Creates `tenant_isolation` and `superadmin_bypass` policies on each
+
+### Key Design Decisions
+- **Separate transaction for RLS**: The first `init_db()` transaction can still be aborted by duplicate-object errors despite DO-block + Python-level catching, so RLS runs in a second `engine.begin()` transaction
+- **Savepoints**: Each `ALTER TABLE` / `CREATE POLICY` wrapped in `begin_nested()` — prevents one failed statement from aborting the entire RLS transaction
+- **Context vars**: `contextvars.ContextVar` ensures per-request isolation across async boundaries; middleware sets tenant_id, auth dependencies set role, `get_db()` reads both
+- **Default -1**: When no tenant context is set, `COALESCE(nullif(current_setting('app.current_tenant_id', true), ''), '-1')::int` resolves to `-1`, matching no rows
+- **Superadmin bypass**: `current_setting('app.current_user_role', true) = 'superadmin'` allows superadmins unrestricted access across tenants
+
+### Files Changed
+| File | Change |
+|---|---|
+| `app/db/session.py` | +`_tenant_ctx`, `_role_ctx`, `set_rls_context()`, `_enable_rls()`, updated `get_db()`, updated `init_db()` |
+| `app/core/tenant_middleware.py` | +`set_rls_context(tenant_id=...)` call |
+| `app/api/v1/dependencies.py` | +`set_rls_context(role=...)` in `get_current_user()` and `_get_api_key_user()` |
+| `alembic/versions/018_enable_rls.py` | New migration — RLS on 11 tables |
+| `app/core/rate_limiter.py` | Fixed double `call_next` hang bug |
+
+### Tests
+- Full suite: **211 passed, 5 skipped, 0 failed**
+- No regressions
+- Ruff format: all changed files formatted (`ruff format`)
+
+---

@@ -7,11 +7,11 @@ docker compose up -d --build          # Start all services (nginx + 3 workers + 
 docker compose down -v                # Tear down everything including DB volume
 ```
 
-**Ports**: NGINX on `:80`, Postgres on `:5433`, Redis on `:6380` (host-mapped to avoid conflicts).
+**Ports**: NGINX on `:80`, Postgres (primary) on `:5433`, Redis on `:6380` (host-mapped to avoid conflicts).
 
 ## Architecture
 
-- **NGINX** (port 80) → consistent hashing LB → **3 FastAPI workers** (port 8000 each) → **Postgres** + **Redis**
+- **NGINX** (port 80) → consistent hashing LB → **3 FastAPI workers** (port 8000 each) → **Postgres primary** (`db:5432`) for writes + **Postgres replica** (`db-replica:5432`) for reads + **Redis**
 - All containers share `clinic-net` bridge network. Service discovery via Docker DNS (`db`, `redis`, `worker`).
 - Health check endpoint: `GET /api/v1/health` (checks DB + Redis connectivity).
 - Swagger UI: `http://localhost:80/docs`, ReDoc: `http://localhost:80/redoc`.
@@ -90,6 +90,14 @@ docker compose down -v                # Tear down everything including DB volume
 - k6 binary location: `C:\Program Files\k6\k6.exe` (not on PATH).
 - Run: `& "C:\Program Files\k6\k6.exe" run loadtest/scheduler.js`
 - Rate limit in NGINX is set to 500r/s for load testing. For production, reduce to ~30r/s.
+
+### Read Replica (Phase 17-A)
+- `db-replica` service in docker-compose.yml uses streaming replication from the primary `db`.
+- `app/db/session.py` provides `get_read_db()` — used by all read-only GET endpoints.
+- `READ_DATABASE_URL` env var defaults to `DATABASE_URL` if empty (single-DB dev mode).
+- Replication user `replicator` is created by `scripts/init-replication.sh` mounted into `db`.
+- Reminder scheduler also uses `get_read_db()` for its read queries.
+- Replication lag: acceptable for list/analytics queries; write endpoints bypass the replica.
 
 ### bcrypt / passlib compatibility
 - `requirements.txt` pins `bcrypt==4.0.1`. Newer bcrypt versions break passlib 1.7.4 with a `ValueError: password cannot be longer than 72 bytes` error.

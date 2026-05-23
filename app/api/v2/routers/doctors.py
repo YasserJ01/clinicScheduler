@@ -1,7 +1,7 @@
 import math
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.db.session import get_db
+from app.db.session import get_read_db
 from app.db.repository import DoctorRepository
 from app.api.v1.dependencies import get_current_user
 
@@ -14,7 +14,7 @@ async def list_doctors(
     page_size: int = Query(20, ge=1, le=100),
     specialty: str | None = Query(None),
     current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_read_db),
 ):
     repo = DoctorRepository(db)
     doctors, total = await repo.list_paginated(

@@ -21,6 +21,7 @@ services:
       replicas: 3
     environment:
       - DATABASE_URL=postgresql+asyncpg://clinic:clinicpass@db:5432/clinic_db
+      - READ_DATABASE_URL=postgresql+asyncpg://clinic:clinicpass@db-replica:5432/clinic_db
       - REDIS_URL=redis://:redispass@redis:6379/0
       - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
       - LOG_LEVEL=info
@@ -41,8 +42,18 @@ services:
       - POSTGRES_USER=clinic
       - POSTGRES_PASSWORD=clinicpass
       - POSTGRES_DB=clinic_db
+      - POSTGRES_HOST_AUTH_METHOD=trust
+    command:
+      - "postgres"
+      - "-c"
+      - "wal_level=replica"
+      - "-c"
+      - "max_wal_senders=3"
+      - "-c"
+      - "wal_keep_size=256"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./scripts/init-replication.sh:/docker-entrypoint-initdb.d/init-replication.sh:ro
     ports:
       - "5433:5432"
     healthcheck:
@@ -50,6 +61,33 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    networks:
+      - clinic-net
+    restart: unless-stopped
+
+  db-replica:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=clinic
+      - POSTGRES_PASSWORD=clinicpass
+      - POSTGRES_DB=clinic_db
+      - POSTGRES_HOST_AUTH_METHOD=trust
+    command:
+      - "bash"
+      - "-c"
+      - |
+        rm -rf /var/lib/postgresql/data/*
+        until PGPASSWORD=clinicpass pg_basebackup \
+          -h db -D /var/lib/postgresql/data \
+          -U replicator -P -Xs -R; do
+          echo 'Waiting for primary...'
+          sleep 2
+        done
+        chown -R postgres:postgres /var/lib/postgresql/data
+        exec postgres
+    depends_on:
+      db:
+        condition: service_healthy
     networks:
       - clinic-net
     restart: unless-stopped
@@ -101,6 +139,7 @@ services:
     command: python -m app.scheduler.reminders
     environment:
       - DATABASE_URL=postgresql+asyncpg://clinic:clinicpass@db:5432/clinic_db
+      - READ_DATABASE_URL=postgresql+asyncpg://clinic:clinicpass@db-replica:5432/clinic_db
       - REDIS_URL=redis://:redispass@redis:6379/0
     depends_on:
       db:

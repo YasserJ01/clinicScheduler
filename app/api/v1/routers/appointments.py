@@ -9,7 +9,7 @@ from typing import Union
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
-from app.db.session import get_db
+from app.db.session import get_db, get_read_db
 from app.db.repository import AppointmentRepository, DoctorRepository, PatientRepository
 from app.api.v1.dependencies import get_current_user
 from app.core.audit import audit_log
@@ -146,7 +146,7 @@ async def list_appointments(
     from_date: str | None = Query(None),
     to_date: str | None = Query(None),
     current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_read_db),
 ):
     tenant_id = current_user.get("tenant_id")
     repo = AppointmentRepository(db)
@@ -470,7 +470,7 @@ async def get_available_slots(
     date: str,
     duration_minutes: int = 30,
     current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_read_db),
 ):
     tenant_id = current_user.get("tenant_id")
     try:
@@ -701,7 +701,7 @@ async def update_appointment_notes(
 async def get_appointment(
     appointment_id: int,
     current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_read_db),
 ):
     tenant_id = current_user.get("tenant_id")
     repo = AppointmentRepository(db)

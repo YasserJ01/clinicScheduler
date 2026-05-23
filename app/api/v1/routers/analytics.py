@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, text
-from app.db.session import get_db
+from app.db.session import get_db, get_read_db
 from app.db.repository import AppointmentRepository, PatientRepository, DoctorRepository
 from app.api.v1.dependencies import get_current_user
 from app.models import Appointment, Patient, Doctor, AuditLog, AppointmentStatus
@@ -24,7 +24,7 @@ async def get_analytics_summary(
     from_date: str | None = Query(None),
     to_date: str | None = Query(None),
     current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_read_db),
 ):
     _require_admin(current_user)
     tenant_id = current_user.get("tenant_id")
@@ -105,7 +105,7 @@ async def get_doctor_utilisation(
     from_date: str | None = Query(None),
     to_date: str | None = Query(None),
     current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_read_db),
 ):
     _require_admin(current_user)
     tenant_id = current_user.get("tenant_id")
@@ -177,7 +177,7 @@ async def get_doctor_utilisation(
 async def get_peak_hours(
     days: int = Query(30, ge=1, le=365),
     current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_read_db),
 ):
     _require_admin(current_user)
     tenant_id = current_user.get("tenant_id")
@@ -213,7 +213,7 @@ async def get_peak_hours(
 async def get_patient_history(
     patient_id: int,
     current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_read_db),
 ):
     _require_admin(current_user)
     tenant_id = current_user.get("tenant_id")
@@ -262,7 +262,7 @@ async def get_audit_log(
     from_date: str | None = Query(None),
     to_date: str | None = Query(None),
     current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_read_db),
 ):
     _require_admin(current_user)
     tenant_id = current_user.get("tenant_id")

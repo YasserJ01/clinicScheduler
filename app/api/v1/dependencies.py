@@ -6,7 +6,7 @@ from jose import JWTError, jwt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
-from app.db.session import get_db
+from app.db.session import get_db, set_rls_context
 from app.models import ApiKey
 from app.core.security import verify_password
 
@@ -56,6 +56,8 @@ async def get_current_user(
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED, detail="Token revoked"
             )
+        role = payload.get("role", "patient")
+        set_rls_context(role=role)
         return {
             "user_id": user_id,
             "role": payload.get("role", "patient"),
@@ -83,9 +85,11 @@ async def _get_api_key_user(api_key: str, db: AsyncSession) -> dict:
         if key.expires_at and key.expires_at < __import__("datetime").datetime.utcnow():
             continue
         if verify_password(api_key, key.key_hash):
+            role = key.role.value if hasattr(key.role, "value") else key.role
+            set_rls_context(role=role)
             return {
                 "user_id": f"apikey:{key.name}",
-                "role": key.role.value,
+                "role": role,
                 "tenant_id": key.tenant_id,
                 "_raw_token": api_key,
                 "_auth_method": "api_key",

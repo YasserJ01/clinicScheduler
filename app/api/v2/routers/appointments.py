@@ -1,7 +1,7 @@
 import math
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.db.session import get_db
+from app.db.session import get_read_db
 from app.db.repository import AppointmentRepository, PatientRepository
 from app.api.v1.dependencies import get_current_user
 
@@ -18,7 +18,7 @@ async def list_appointments(
     from_date: str | None = Query(None),
     to_date: str | None = Query(None),
     current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_read_db),
 ):
     repo = AppointmentRepository(db)
     from_dt = _parse_time_slot(from_date) if from_date else None

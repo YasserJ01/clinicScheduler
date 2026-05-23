@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
-from app.db.session import get_db
+from app.db.session import get_db, get_read_db
 from app.db.repository import PatientRepository
 from app.models import Patient, User
 from app.api.v1.dependencies import get_current_user
@@ -67,7 +67,7 @@ async def list_patients(
     page_size: int = Query(20, ge=1, le=100),
     search: str | None = Query(None),
     current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_read_db),
 ):
     tenant_id = current_user.get("tenant_id")
     repo = PatientRepository(db)
@@ -127,7 +127,7 @@ async def get_my_profile(
 async def get_patient(
     patient_id: int,
     current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_read_db),
 ):
     role = current_user.get("role", "patient")
     if role not in ("admin", "doctor"):

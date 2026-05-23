@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.db.session import get_db
+from app.db.session import get_db, get_read_db
 from app.db.repository import DoctorRepository, AppointmentRepository, PatientRepository
 from app.api.v1.dependencies import get_current_user
 from app.core.audit import audit_log
@@ -75,7 +75,7 @@ async def list_doctors(
     page_size: int = Query(20, ge=1, le=100),
     specialty: str | None = Query(None),
     current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_read_db),
 ):
     tenant_id = current_user.get("tenant_id")
     repo = DoctorRepository(db)
@@ -121,7 +121,7 @@ async def create_doctor(
 async def get_doctor(
     doctor_id: int,
     current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_read_db),
 ):
     tenant_id = current_user.get("tenant_id")
     repo = DoctorRepository(db)
@@ -177,7 +177,7 @@ async def update_doctor(
 async def get_doctor_schedule(
     doctor_id: int,
     current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_read_db),
 ):
     tenant_id = current_user.get("tenant_id")
     repo = DoctorRepository(db)
@@ -350,7 +350,7 @@ async def delete_schedule_day(
 async def get_doctor_today_appointments(
     doctor_id: int,
     current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_read_db),
 ):
     role = current_user.get("role", "patient")
     if role not in ("doctor", "admin"):
@@ -408,7 +408,7 @@ async def get_doctor_upcoming_appointments(
     doctor_id: int,
     days: int = Query(7, ge=1, le=30),
     current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_read_db),
 ):
     role = current_user.get("role", "patient")
     if role not in ("doctor", "admin"):
@@ -463,7 +463,7 @@ async def get_doctor_upcoming_appointments(
 async def get_doctor_patients(
     doctor_id: int,
     current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_read_db),
 ):
     role = current_user.get("role", "patient")
     if role not in ("doctor", "admin"):
