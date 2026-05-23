@@ -1,6 +1,6 @@
 # Phase 17 — Operational Excellence
 
-## Status: Active (Sub-Phase 17-E Complete)
+## Status: Active (Sub-Phase 17-F Complete)
 
 ---
 
@@ -487,9 +487,122 @@ Build and execute an automated Disaster Recovery test that validates the full ba
 
 ---
 
+## Sub-Phase 17-F: NGINX Config Hardening ✅
+
+### Objective
+Harden NGINX configuration for production deployment by reducing rate limits, switching to round-robin load balancing, adding security headers, implementing connection limiting, preventing information disclosure, hardening buffer sizes, restricting HTTP methods, and strengthening TLS configuration.
+
+### Changes
+
+#### 1. Rate Limiting Hardened
+- **Before**: `rate=500r/s` (load testing default, set in Phase 4)
+- **After**: `rate=30r/s` — production-safe rate limiting
+- Burst: 50 requests with `nodelay` (unchanged)
+- Zone size: 10 MB (unchanged)
+- Applied to all `/api/` requests
+- Exceeded requests return HTTP 429 (`limit_req_status 429`) instead of default 503
+
+#### 2. Connection Limiting (NEW)
+- `limit_conn_zone $binary_remote_addr zone=conn_limit:10m` — 10 MB shared memory zone
+- `limit_conn conn_limit 10` — max 10 concurrent connections per IP
+- Exceeded connections return HTTP 429 (`limit_conn_status 429`) instead of default 503
+- Applied to `/api/` location block
+
+#### 3. Load Balancing: Round-Robin
+- **`nginx.conf`**: Added `upstream clinic_backend { server worker:8000; }` block with default round-robin. Still uses DNS-based resolution via `set $backend` + resolver for non-TLS config.
+- **`nginx.conf.tls`**: Removed `hash $request_uri consistent` from upstream block. Now uses NGINX default round-robin for more even load distribution.
+- `proxy_next_upstream_tries` increased from 2 to 3, added `proxy_next_upstream_timeout 5s`.
+
+#### 4. Security Headers (NEW)
+
+**Non-TLS + TLS** (`nginx.conf` and `nginx.conf.tls`):
+```
+X-Content-Type-Options: nosniff
+X-Frame-Options: SAMEORIGIN
+X-XSS-Protection: 0
+Referrer-Policy: strict-origin-when-cross-origin
+Permissions-Policy: camera=(), microphone=(), geolocation=()
+```
+
+**TLS only** (`nginx.conf.tls`):
+```
+Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
+Content-Security-Policy: default-src 'self'; script-src 'self'; ...
+```
+
+#### 5. Information Disclosure Prevention (NEW)
+- `server_tokens off` — NGINX version hidden from error pages and `Server` headers
+- `proxy_hide_header X-Powered-By` — FastAPI/uvicorn server info hidden from proxied responses
+
+#### 6. Buffer Overflow Hardening (NEW)
+| Setting | Value | Purpose |
+|---|---|---|
+| `client_body_buffer_size` | 128k | Request body buffer |
+| `client_max_body_size` | 1m | Max request body size |
+| `client_header_buffer_size` | 1k | Header buffer (small = defense against header floods) |
+| `large_client_header_buffers` | 4 8k | Oversized header handling |
+| `output_buffers` | 32 32k | Response buffering |
+
+#### 7. Timeout Hardening (NEW)
+| Setting | Value |
+|---|---|
+| `client_header_timeout` | 15s |
+| `client_body_timeout` | 15s |
+| `send_timeout` | 10s |
+
+#### 8. HTTP Method Restriction (NEW)
+- Allowed methods: `GET`, `POST`, `HEAD`, `PATCH`, `PUT`, `DELETE`, `OPTIONS`
+- `OPTIONS` is required for CORS preflight — passed through to backend FastAPI CORS middleware
+- Dangerous methods (`TRACE`, `CONNECT`, `CONNECT`, etc.) blocked at NGINX level with HTTP 405 (HTML response, never reaches backend)
+- Blocked at NGINX vs backend: TRACE → NGINX HTML 405; OPTIONS → backend JSON 405 (routes without OPTIONS handler)
+
+#### 9. TLS Hardening (`nginx.conf.tls`)
+- Removed `ssl_prefer_server_ciphers on` → set to `off` (client preference when supported)
+- Added `ssl_session_tickets off` — prevents session ticket reuse attacks
+- Updated cipher string to prioritize AEAD ciphers with forward secrecy: `ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384`
+- HSTS updated from `includeSubDomains` to `includeSubDomains; preload`
+- Added `Content-Security-Policy` header
+
+#### 10. Agent Documentation (`app/docs/AGENTS.md`)
+- Updated NGINX routing section with hardening details
+- Added full **NGINX Config Hardening (Phase 17-F)** section covering:
+  - Rate limiting (30r/s)
+  - Connection limiting (10/IP)
+  - Round-robin load balancing
+  - Security headers table
+  - Information disclosure prevention
+  - Buffer overflow and timeout settings
+  - HTTP method restriction
+  - TLS hardening details
+- Updated all 500r/s references to 30r/s across the file
+
+### Key Design Decisions
+- **30r/s rate limit**: Chosen as a safe production default. Limits brute-force login attempts (with `burst=50` allowing short spikes). Can be adjusted per-environment.
+- **Connection limiting at 10/IP**: Prevents connection exhaustion attacks while allowing normal browser behavior (which typically uses 6-8 concurrent connections).
+- **Round-robin instead of consistent hashing**: Consistent hashing provides cache affinity but causes uneven load when backends come and go. Docker DNS already provides reasonable round-robin for the non-TLS config.
+- **`proxy_hide_header X-Powered-By` vs `server_tokens`**: `server_tokens` hides NGINX version; `proxy_hide_header` strips upstream framework headers. Both are needed for full information disclosure prevention.
+- **`ssl_prefer_server_ciphers off`**: Modern clients have better cipher preferences than servers. Only set to `on` when PCI compliance requires a specific cipher order.
+- **`X-XSS-Protection: 0`**: The old `X-XSS-Protection` header is deprecated in favor of `Content-Security-Policy`. Setting it to `0` explicitly disables the legacy filter.
+- **TLS hardening applied only to `nginx.conf.tls`**: The non-TLS config is used for development and internal networks where TLS is terminated upstream.
+- **Buffer sizes tuned for API workloads**: `client_max_body_size 1m` is sufficient for appointment/patient payloads while preventing large upload attacks.
+
+### Files Changed
+| File | Change |
+|---|---|
+| `nginx/nginx.conf` | Complete rewrite: rate limit 500→30r/s, added upstream block, security headers, connection limiting, buffer hardening, timeouts, method restriction |
+| `nginx/nginx.conf.tls` | Same hardening as above + TLS cipher hardening, ssl_session_tickets off, HSTS preload, CSP header |
+| `app/docs/AGENTS.md` | Updated NGINX routing + k6 sections, added full NGINX Hardening section |
+
+### Tests
+- Full suite: **211 passed, 5 skipped, 0 failed**
+- Updated `test_rate_limit_exceeded_returns_429`: added `time.sleep(0.05)` between requests to stay within NGINX's 30r/s limit; added `limit_req_status 429` and `limit_conn_status 429` to NGINX for consistent rate limit error codes
+- No regressions
+- Ruff format: no Python files needed reformatting
+
+---
+
 ## Upcoming Sub-Phases
 
 | Sub-Phase | Status | Description |
 |---|---|---|
-| 17-F: NGINX Config Hardening | Pending | Round-robin, rate limit tuning |
 | 17-G: Load Test + Regression | Pending | k6 at 200 VUs |

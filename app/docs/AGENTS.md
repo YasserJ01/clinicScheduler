@@ -37,7 +37,7 @@ docker compose down -v                # Tear down everything including DB volume
 | `app/core/webhooks.py` | Webhook delivery with HMAC-SHA256 signing and retry logic. |
 | `app/core/email.py` | Email service abstraction (Null/SMTP/SendGrid). |
 | `app/core/deprecation_middleware.py` | Deprecation headers for v1 API endpoints. |
-| `nginx/nginx.conf` | NGINX config: consistent hashing, rate limiting (500r/s), retry on 502/503, SPA serving. |
+| `nginx/nginx.conf` | NGINX config: round-robin, rate limiting (30r/s), retry on 502/503, SPA serving, security hardening. |
 | `loadtest/scheduler.js` | k6 load test: 30s ramp to 50 VUs, 1m at 200 VUs, 30s ramp down. |
 | `tests/unit/test_security.py` | 15 unit tests: password hashing, JWT creation/validation, `alg: none` attack. |
 | `tests/integration/test_auth.py` | 10 integration tests: register, login, JWT validation. |
@@ -86,10 +86,77 @@ docker compose down -v                # Tear down everything including DB volume
 - Only `/api/`, `/docs`, `/redoc`, and `/openapi.json` are proxied. Any new top-level route must be added to `nginx/nginx.conf`.
 - Health check is at `/api/v1/health` (not `/health`). Dockerfile HEALTHCHECK uses this path.
 
+### NGINX Config Hardening (Phase 17-F)
+
+#### Rate Limiting
+- **30 requests/second per IP** (was 500 r/s — hardened from load testing default)
+- Burst: 50 requests with `nodelay`
+- Zone: 10 MB shared memory (`$binary_remote_addr` key)
+- Exceeded requests return HTTP 429 (`limit_req_status 429`)
+
+#### Connection Limiting
+- **10 concurrent connections per IP**
+- `limit_conn_zone $binary_remote_addr zone=conn_limit:10m`
+- Exceeded connections return HTTP 429 (`limit_conn_status 429`)
+- Applied to `/api/` location block
+
+#### Load Balancing
+- **Round-robin** via upstream block (was consistent hashing in TLS config)
+- Non-TLS config: DNS-based round-robin via `resolver 127.0.0.11` + `set $backend`
+- TLS config: `upstream clinic_backend` block (no `hash` directive = default round-robin)
+- `proxy_next_upstream_tries 3` (was 2) with `proxy_next_upstream_timeout 5s`
+
+#### Security Headers (all locations)
+| Header | Value |
+|---|---|
+| `X-Content-Type-Options` | `nosniff` |
+| `X-Frame-Options` | `SAMEORIGIN` |
+| `X-XSS-Protection` | `0` (modern browsers) |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` |
+| `Permissions-Policy` | `camera=(), microphone=(), geolocation=()` |
+| `Strict-Transport-Security` (TLS only) | `max-age=63072000; includeSubDomains; preload` |
+| `Content-Security-Policy` (TLS only) | `default-src 'self'; script-src 'self'; ...` |
+
+#### Information Disclosure Prevention
+- `server_tokens off` — hides NGINX version from error pages and headers
+- `proxy_hide_header X-Powered-By` — removes server info from upstream responses
+
+#### Buffer Overflow Hardening
+| Setting | Value |
+|---|---|
+| `client_body_buffer_size` | 128k |
+| `client_max_body_size` | 1m |
+| `client_header_buffer_size` | 1k |
+| `large_client_header_buffers` | 4 8k |
+| `output_buffers` | 32 32k |
+| `postpone_output` | 1460 |
+
+#### Timeouts
+| Setting | Value |
+|---|---|
+| `client_header_timeout` | 15s |
+| `client_body_timeout` | 15s |
+| `send_timeout` | 10s |
+| `proxy_connect_timeout` | 3s |
+| `proxy_send_timeout` | 5s |
+| `proxy_read_timeout` | 10s |
+
+#### HTTP Method Restriction
+- Only `GET`, `POST`, `HEAD`, `PATCH`, `PUT`, `DELETE`, `OPTIONS` allowed in `/api/`
+- `OPTIONS` is required for CORS preflight — passed through to backend
+- Dangerous methods (`TRACE`, `CONNECT`, etc.) blocked at NGINX level with HTTP 405 (HTML response, not passed to backend)
+
+#### TLS Hardening (`nginx.conf.tls`)
+- Protocols: TLSv1.2, TLSv1.3 only
+- Ciphers: strong AEAD ciphers (GCM, ChaCha20) with forward secrecy
+- `ssl_prefer_server_ciphers off` — client preference when possible
+- `ssl_session_tickets off` — prevents session ticket reuse
+- HSTS with `preload` directive
+
 ### k6 load test
 - k6 binary location: `C:\Program Files\k6\k6.exe` (not on PATH).
 - Run: `& "C:\Program Files\k6\k6.exe" run loadtest/scheduler.js`
-- Rate limit in NGINX is set to 500r/s for load testing. For production, reduce to ~30r/s.
+- Rate limit in NGINX is set to 30r/s (production-hardened from Phase 17-F).
 
 ### Read Replica (Phase 17-A)
 - `db-replica` service in docker-compose.yml uses streaming replication from the primary `db`.
@@ -153,7 +220,7 @@ docker compose down -v                # Tear down everything including DB volume
 - **Scaling test (3 workers)**: `docker compose up -d`
 - **Thresholds**: p95 < 500ms, HTTP error < 5%, app error < 10%
 - **Results**: 3 workers show 20% higher throughput and 55% lower p95 latency vs 1 worker
-- **Production rate limit**: Reduce from 500 r/s to ~30 r/s per IP in production
+- **Rate limit**: 30 r/s per IP (hardened in Phase 17-F, was 500 r/s)
 - **Note**: k6 may OOM on Windows with 200 VUs; use 50 VUs for local testing
 
 ### Database Indexes
@@ -608,7 +675,10 @@ docker compose down -v && docker compose up -d --build
 docker logs clinic-scheduler-worker-1
 
 # Reload NGINX config without restart
-docker compose exec nginx nginx -s reload
+docker compose exec nginx nginx -t && docker compose exec nginx nginx -s reload
+
+# Verify NGINX security headers
+curl -s -I http://localhost/api/v1/health | head -15
 
 # Run load test
 & "C:\Program Files\k6\k6.exe" run loadtest/scheduler.js

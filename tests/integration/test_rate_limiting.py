@@ -1,3 +1,4 @@
+import time
 import uuid
 
 
@@ -32,8 +33,9 @@ class TestRateLimiting:
             assert "X-RateLimit-Limit" not in resp.headers
 
     def test_rate_limit_exceeded_returns_429(self, http_client):
-        # The default rate limit is 100 requests per 60s window.
-        # Send 101 requests to trigger the limit.
+        # App-level rate limit: 100 requests per 60s window.
+        # NGINX rate limit (Phase 17-F): 30r/s + burst 50 per IP.
+        # Send requests at ~20r/s (50ms delay) to stay within NGINX limit.
         RATE_LIMIT = 100
 
         username = f"ratelimit_user_{uuid.uuid4().hex[:8]}"
@@ -51,6 +53,7 @@ class TestRateLimiting:
             assert resp.status_code == 200, (
                 f"Failed at request {i}, remaining={remaining}"
             )
+            time.sleep(0.05)
 
         resp = http_client.get("/api/v1/doctors", headers=headers)
         assert resp.status_code == 429
