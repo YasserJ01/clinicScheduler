@@ -108,3 +108,79 @@ class TestJWTValidation:
             headers={"Authorization": f"Bearer {expired_token}"},
         )
         assert resp.status_code in (401, 403)
+
+
+class TestAccountLockout:
+    def test_locks_after_five_failed_attempts(self, http_client):
+        username = f"lockout_{uuid.uuid4().hex[:8]}"
+        http_client.post(
+            "/api/v1/auth/register",
+            json={"username": username, "password": "correct_password"},
+        )
+
+        for _ in range(5):
+            resp = http_client.post(
+                "/api/v1/auth/login",
+                json={"username": username, "password": "wrong_password"},
+            )
+            assert resp.status_code == 401
+
+        resp = http_client.post(
+            "/api/v1/auth/login",
+            json={"username": username, "password": "wrong_password"},
+        )
+        assert resp.status_code == 429
+        assert "locked" in resp.json()["detail"].lower()
+
+    def test_successful_login_resets_failed_attempts(self, http_client):
+        username = f"reset_lock_{uuid.uuid4().hex[:8]}"
+        http_client.post(
+            "/api/v1/auth/register",
+            json={"username": username, "password": "correct_password"},
+        )
+
+        for _ in range(4):
+            resp = http_client.post(
+                "/api/v1/auth/login",
+                json={"username": username, "password": "wrong_password"},
+            )
+            assert resp.status_code == 401
+
+        resp = http_client.post(
+            "/api/v1/auth/login",
+            json={"username": username, "password": "correct_password"},
+        )
+        assert resp.status_code == 200
+        assert "access_token" in resp.json()
+
+        resp = http_client.post(
+            "/api/v1/auth/login",
+            json={"username": username, "password": "wrong_password"},
+        )
+        assert resp.status_code == 401
+
+    def test_lockout_does_not_affect_other_users(self, http_client):
+        locked_user = f"locked_user_{uuid.uuid4().hex[:8]}"
+        other_user = f"other_user_{uuid.uuid4().hex[:8]}"
+
+        http_client.post(
+            "/api/v1/auth/register",
+            json={"username": locked_user, "password": "correct_password"},
+        )
+        http_client.post(
+            "/api/v1/auth/register",
+            json={"username": other_user, "password": "other_password"},
+        )
+
+        for _ in range(6):
+            http_client.post(
+                "/api/v1/auth/login",
+                json={"username": locked_user, "password": "wrong_password"},
+            )
+
+        resp = http_client.post(
+            "/api/v1/auth/login",
+            json={"username": other_user, "password": "other_password"},
+        )
+        assert resp.status_code == 200
+        assert "access_token" in resp.json()

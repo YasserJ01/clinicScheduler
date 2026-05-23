@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import redis.asyncio as aioredis
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException
@@ -9,6 +10,7 @@ from app.db.session import get_db
 from app.db.repository import PatientRepository, UserRepository
 from app.models import User
 from app.api.v1.dependencies import get_current_user
+from app.core.audit import audit_log
 from app.core.security import (
     create_access_token,
     create_refresh_token,
@@ -17,7 +19,11 @@ from app.core.security import (
 )
 from app.config import settings
 
+logger = logging.getLogger("clinic.auth")
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+MAX_LOGIN_ATTEMPTS = 5
+LOCKOUT_MINUTES = 15
 
 
 class RegisterRequest(BaseModel):
@@ -112,8 +118,33 @@ async def login(
 ):
     repo = UserRepository(db)
     user = await repo.get_by_username(req.username)
+
+    if user and user.locked_until and user.locked_until > datetime.utcnow():
+        raise HTTPException(
+            status_code=429,
+            detail=f"Account locked. Try again after {user.locked_until.isoformat()}",
+        )
+
     if not user or not verify_password(req.password, user.hashed_password):
+        if user:
+            user.failed_login_attempts += 1
+            if user.failed_login_attempts >= MAX_LOGIN_ATTEMPTS:
+                user.locked_until = datetime.utcnow() + timedelta(
+                    minutes=LOCKOUT_MINUTES
+                )
+                logger.warning("Account locked: username=%s", req.username)
+                await audit_log(
+                    db,
+                    actor=req.username,
+                    action="account_locked",
+                    entity_type="user",
+                    outcome="warning",
+                )
+            await db.commit()
         raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    user.failed_login_attempts = 0
+    user.locked_until = None
     raw_refresh, refresh_hash = create_refresh_token(user.username)
     refresh_sha256 = hashlib.sha256(raw_refresh.encode()).hexdigest()
     expires_at = (
