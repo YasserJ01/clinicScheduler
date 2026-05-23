@@ -66,6 +66,26 @@ async def _create_partial_unique_index(conn):
         pass
 
 
+async def _add_enum_value_if_not_exists(conn, enum_name, new_value):
+    """Add a value to an existing PostgreSQL ENUM type.
+
+    Uses a DO block with exception handling so that duplicate_value
+    errors are caught inside PostgreSQL, preventing asyncpg transaction
+    abort.
+    """
+    try:
+        await conn.execute(
+            text(f"""
+            DO $$ BEGIN
+                ALTER TYPE {enum_name} ADD VALUE '{new_value}';
+            EXCEPTION WHEN duplicate_object THEN null;
+            END $$;
+        """)
+        )
+    except (IntegrityError, ProgrammingError):
+        pass
+
+
 async def init_db():
     if settings.ALEMBIC_ENABLED:
         await _run_alembic_migrations()
@@ -74,6 +94,7 @@ async def init_db():
             await _create_enum_if_not_exists(
                 conn, "userrole", ["patient", "doctor", "admin"]
             )
+            await _add_enum_value_if_not_exists(conn, "userrole", "superadmin")
             await _create_enum_if_not_exists(
                 conn,
                 "appointmentstatus",

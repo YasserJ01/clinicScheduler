@@ -120,6 +120,17 @@ async def send_confirmation_email(patient_email: str, appointment: dict) -> None
     await service.send(patient_email, subject, body)
 
 
+async def send_password_reset_email(user_email: str, token: str) -> None:
+    service = get_email_service()
+    subject = "Password Reset"
+    body = (
+        f"You requested a password reset.\n\n"
+        f"Use this token to reset your password:\n{token}\n\n"
+        f"This token expires in 15 minutes."
+    )
+    await service.send(user_email, subject, body)
+
+
 async def send_reminder_email(patient_email: str, appointment: dict) -> None:
     service = get_email_service()
     subject = "Appointment Reminder — Tomorrow"

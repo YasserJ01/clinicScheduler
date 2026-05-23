@@ -24,6 +24,32 @@ class UserRole(str, enum.Enum):
     PATIENT = "patient"
     DOCTOR = "doctor"
     ADMIN = "admin"
+    SUPERADMIN = "superadmin"
+
+
+class ApiKey(Base):
+    __tablename__ = "api_keys"
+    __table_args__ = (Index("ix_api_keys_tenant_id", "tenant_id"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False)
+    key_hash = Column(String(255), nullable=False)
+    key_prefix = Column(String(8), nullable=False)
+    name = Column(String(200), nullable=False)
+    role = Column(
+        ENUM(
+            UserRole,
+            name="userrole",
+            create_type=False,
+            values_callable=lambda x: [e.value for e in x],
+        ),
+        nullable=False,
+        default=UserRole.PATIENT,
+    )
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_by = Column(String(100), nullable=False)
+    expires_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
 
 class Tenant(Base):
@@ -64,6 +90,9 @@ class User(Base):
     refresh_token_sha256 = Column(String(64), nullable=True)
     failed_login_attempts = Column(Integer, nullable=False, default=0)
     locked_until = Column(DateTime, nullable=True)
+    password_reset_jti = Column(String(32), nullable=True, index=True)
+    password_reset_hash = Column(String(255), nullable=True)
+    password_reset_expires_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
     tenant = relationship("Tenant", back_populates="users")

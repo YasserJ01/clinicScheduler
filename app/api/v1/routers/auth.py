@@ -8,13 +8,17 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from app.db.repository import PatientRepository, UserRepository
-from app.models import User
+from app.models import Patient, User
 from app.api.v1.dependencies import get_current_user
 from app.core.audit import audit_log
+from app.core.email import send_password_reset_email
 from app.core.security import (
     create_access_token,
+    create_password_reset_token,
     create_refresh_token,
+    get_password_hash,
     verify_password,
+    verify_password_reset_token,
     verify_refresh_token,
 )
 from app.config import settings
@@ -24,6 +28,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 MAX_LOGIN_ATTEMPTS = 5
 LOCKOUT_MINUTES = 15
+PASSWORD_RESET_EXPIRE_MINUTES = 15
 
 
 class RegisterRequest(BaseModel):
@@ -54,6 +59,22 @@ class TokenResponse(BaseModel):
 
 class RefreshRequest(BaseModel):
     refresh_token: str
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_password_length(cls, v: str) -> str:
+        if len(v.encode("utf-8")) > 72:
+            raise ValueError("Password must not exceed 72 bytes (bcrypt limit)")
+        return v
 
 
 _redis: aioredis.Redis | None = None
@@ -228,3 +249,72 @@ async def logout(
     except Exception:
         pass
     return {"message": "Logged out successfully"}
+
+
+@router.post("/forgot-password")
+async def forgot_password(
+    req: ForgotPasswordRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    patient_result = await db.execute(select(Patient).where(Patient.email == req.email))
+    patient = patient_result.scalar_one_or_none()
+
+    if patient and patient.user_id:
+        user_result = await db.execute(select(User).where(User.id == patient.user_id))
+        user = user_result.scalar_one_or_none()
+        if user:
+            full_token, jti, token_hash = create_password_reset_token()
+            user.password_reset_jti = jti
+            user.password_reset_hash = token_hash
+            user.password_reset_expires_at = datetime.utcnow() + timedelta(
+                minutes=PASSWORD_RESET_EXPIRE_MINUTES
+            )
+            await db.commit()
+            await send_password_reset_email(patient.email, full_token)
+            logger.info("Password reset token issued: user=%s", user.username)
+
+    return {"message": "If that email is registered, a reset link has been sent"}
+
+
+@router.post("/reset-password")
+async def reset_password(
+    req: ResetPasswordRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        jti, _ = req.token.split(".", 1)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid reset token format")
+
+    result = await db.execute(select(User).where(User.password_reset_jti == jti))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid reset token")
+
+    if (
+        user.password_reset_expires_at
+        and user.password_reset_expires_at < datetime.utcnow()
+    ):
+        raise HTTPException(status_code=400, detail="Reset token has expired")
+
+    if not verify_password_reset_token(req.token, user.password_reset_hash):
+        raise HTTPException(status_code=400, detail="Invalid reset token")
+
+    user.hashed_password = get_password_hash(req.new_password)
+    user.password_reset_jti = None
+    user.password_reset_hash = None
+    user.password_reset_expires_at = None
+    user.failed_login_attempts = 0
+    user.locked_until = None
+    await db.commit()
+
+    await audit_log(
+        db,
+        actor=user.username,
+        action="password_reset",
+        entity_type="user",
+        entity_id=user.id,
+    )
+    logger.info("Password reset completed: user=%s", user.username)
+
+    return {"message": "Password has been reset successfully"}

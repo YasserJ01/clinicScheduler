@@ -3,11 +3,14 @@ import redis.asyncio as aioredis
 from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.db.session import get_db
-from sqlalchemy.ext.asyncio import AsyncSession
+from app.models import ApiKey
+from app.core.security import verify_password
 
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
 
 _redis: aioredis.Redis | None = None
 
@@ -20,9 +23,19 @@ async def _get_redis() -> aioredis.Redis:
 
 
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+    request: Request = None,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    if request and request.headers.get("X-API-Key"):
+        return await _get_api_key_user(request.headers["X-API-Key"], db)
+
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+        )
+
     try:
         payload = jwt.decode(
             credentials.credentials,
@@ -48,11 +61,40 @@ async def get_current_user(
             "role": payload.get("role", "patient"),
             "tenant_id": payload.get("tenant_id"),
             "_raw_token": credentials.credentials,
+            "_auth_method": "jwt",
         }
     except JWTError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Token decode error"
         )
+
+
+async def _get_api_key_user(api_key: str, db: AsyncSession) -> dict:
+    prefix = api_key[:8]
+    result = await db.execute(
+        select(ApiKey).where(
+            ApiKey.key_prefix == prefix,
+            ApiKey.is_active.is_(True),
+        )
+    )
+    matches = result.scalars().all()
+
+    for key in matches:
+        if key.expires_at and key.expires_at < __import__("datetime").datetime.utcnow():
+            continue
+        if verify_password(api_key, key.key_hash):
+            return {
+                "user_id": f"apikey:{key.name}",
+                "role": key.role.value,
+                "tenant_id": key.tenant_id,
+                "_raw_token": api_key,
+                "_auth_method": "api_key",
+            }
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid API key",
+    )
 
 
 async def get_current_tenant(

@@ -10,17 +10,29 @@ from app.db.session import get_db
 from app.db.repository import PatientRepository, AppointmentRepository
 from app.api.v1.dependencies import get_current_user
 from app.core.audit import audit_log
-from app.models import Doctor, User, UserRole, Webhook, WebhookDelivery
+from app.core.security import get_password_hash
+from app.models import ApiKey, Doctor, Tenant, User, UserRole, Webhook, WebhookDelivery
 
 logger = logging.getLogger("clinic.admin")
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 
+ADMIN_ROLES = {"admin", "superadmin"}
+
+
 def _require_admin(current_user: dict) -> None:
-    if current_user["role"] != "admin":
+    if current_user["role"] not in ADMIN_ROLES:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required"
+        )
+
+
+def _require_superadmin(current_user: dict) -> None:
+    if current_user["role"] != "superadmin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Superadmin access required",
         )
 
 
@@ -401,6 +413,27 @@ async def list_webhook_deliveries(
     }
 
 
+class TenantCreate(BaseModel):
+    name: str
+    slug: str
+    is_active: bool = True
+
+
+class TenantUpdate(BaseModel):
+    name: str | None = None
+    is_active: bool | None = None
+
+
+class ApiKeyCreate(BaseModel):
+    name: str
+    role: str = "patient"
+    expires_at: str | None = None
+
+
+class ApiKeyUpdate(BaseModel):
+    is_active: bool
+
+
 class LinkUserRequest(BaseModel):
     user_id: int
 
@@ -447,3 +480,345 @@ async def link_doctor_user(
     )
 
     return {"doctor_id": doctor_id, "user_id": req.user_id, "linked": True}
+
+
+@router.get("/tenants")
+async def list_tenants(
+    page: int = 1,
+    page_size: int = 20,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    _require_superadmin(current_user)
+
+    count_result = await db.execute(select(func.count(Tenant.id)))
+    total = count_result.scalar() or 0
+
+    result = await db.execute(
+        select(Tenant)
+        .order_by(Tenant.id)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    tenants = result.scalars().all()
+
+    items = [
+        {
+            "id": t.id,
+            "name": t.name,
+            "slug": t.slug,
+            "is_active": t.is_active,
+            "created_at": t.created_at.isoformat() if t.created_at else None,
+        }
+        for t in tenants
+    ]
+
+    pages = (total + page_size - 1) // page_size if total > 0 else 0
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "pages": pages,
+    }
+
+
+@router.get("/tenants/{tenant_id}")
+async def get_tenant(
+    tenant_id: int,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    _require_superadmin(current_user)
+
+    result = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
+    tenant = result.scalar_one_or_none()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    return {
+        "id": tenant.id,
+        "name": tenant.name,
+        "slug": tenant.slug,
+        "is_active": tenant.is_active,
+        "created_at": tenant.created_at.isoformat() if tenant.created_at else None,
+    }
+
+
+@router.post("/tenants", status_code=201)
+async def create_tenant(
+    req: TenantCreate,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    _require_superadmin(current_user)
+
+    existing = await db.execute(select(Tenant).where(Tenant.slug == req.slug))
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail="Tenant slug already exists")
+
+    tenant = Tenant(name=req.name, slug=req.slug, is_active=req.is_active)
+    db.add(tenant)
+    await db.flush()
+
+    await audit_log(
+        db,
+        actor=current_user["user_id"],
+        action="create_tenant",
+        entity_type="tenant",
+        entity_id=tenant.id,
+        details={"name": req.name, "slug": req.slug},
+    )
+
+    return {
+        "id": tenant.id,
+        "name": tenant.name,
+        "slug": tenant.slug,
+        "is_active": tenant.is_active,
+        "created_at": tenant.created_at.isoformat() if tenant.created_at else None,
+    }
+
+
+@router.patch("/tenants/{tenant_id}")
+async def update_tenant(
+    tenant_id: int,
+    req: TenantUpdate,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    _require_superadmin(current_user)
+
+    result = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
+    tenant = result.scalar_one_or_none()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    if req.name is not None:
+        tenant.name = req.name
+    if req.is_active is not None:
+        tenant.is_active = req.is_active
+    await db.flush()
+
+    await audit_log(
+        db,
+        actor=current_user["user_id"],
+        action="update_tenant",
+        entity_type="tenant",
+        entity_id=tenant_id,
+        details={"name": req.name, "is_active": req.is_active},
+    )
+
+    return {
+        "id": tenant.id,
+        "name": tenant.name,
+        "slug": tenant.slug,
+        "is_active": tenant.is_active,
+        "created_at": tenant.created_at.isoformat() if tenant.created_at else None,
+    }
+
+
+@router.delete("/tenants/{tenant_id}")
+async def deactivate_tenant(
+    tenant_id: int,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    _require_superadmin(current_user)
+
+    result = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
+    tenant = result.scalar_one_or_none()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    if tenant.slug == "default":
+        raise HTTPException(
+            status_code=400, detail="Cannot deactivate the default tenant"
+        )
+
+    tenant.is_active = False
+    await db.flush()
+
+    await audit_log(
+        db,
+        actor=current_user["user_id"],
+        action="deactivate_tenant",
+        entity_type="tenant",
+        entity_id=tenant_id,
+    )
+
+    return {"success": True, "message": f"Tenant {tenant_id} deactivated"}
+
+
+@router.post("/api-keys", status_code=201)
+async def create_api_key(
+    req: ApiKeyCreate,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    _require_admin(current_user)
+    tenant_id = current_user.get("tenant_id", 1)
+
+    raw_key = secrets.token_hex(32)
+    key_prefix = raw_key[:8]
+    key_hash = get_password_hash(raw_key)
+
+    expires_at = None
+    if req.expires_at:
+        from datetime import datetime as dt_mod
+
+        try:
+            expires_at = dt_mod.fromisoformat(req.expires_at)
+        except ValueError:
+            raise HTTPException(
+                status_code=400, detail="Invalid expires_at format. Use ISO 8601."
+            )
+
+    api_key = ApiKey(
+        tenant_id=tenant_id,
+        key_hash=key_hash,
+        key_prefix=key_prefix,
+        name=req.name,
+        role=req.role,
+        is_active=True,
+        created_by=current_user["user_id"],
+        expires_at=expires_at,
+    )
+    db.add(api_key)
+    await db.flush()
+
+    await audit_log(
+        db,
+        actor=current_user["user_id"],
+        action="create_api_key",
+        entity_type="api_key",
+        entity_id=api_key.id,
+        details={"name": req.name, "key_prefix": key_prefix},
+    )
+
+    return {
+        "id": api_key.id,
+        "name": api_key.name,
+        "key_prefix": key_prefix,
+        "raw_key": raw_key,
+        "role": api_key.role.value if hasattr(api_key.role, "value") else api_key.role,
+        "is_active": api_key.is_active,
+        "created_at": api_key.created_at.isoformat() if api_key.created_at else None,
+        "expires_at": api_key.expires_at.isoformat() if api_key.expires_at else None,
+    }
+
+
+@router.get("/api-keys")
+async def list_api_keys(
+    page: int = 1,
+    page_size: int = 20,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    _require_admin(current_user)
+    tenant_id = current_user.get("tenant_id")
+
+    where_clauses = [ApiKey.tenant_id == tenant_id]
+    count_stmt = select(func.count(ApiKey.id)).where(*where_clauses)
+    count_result = await db.execute(count_stmt)
+    total = count_result.scalar() or 0
+
+    stmt = (
+        select(ApiKey)
+        .where(*where_clauses)
+        .order_by(ApiKey.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    result = await db.execute(stmt)
+    keys = result.scalars().all()
+
+    items = [
+        {
+            "id": k.id,
+            "name": k.name,
+            "key_prefix": k.key_prefix,
+            "role": k.role.value if hasattr(k.role, "value") else k.role,
+            "is_active": k.is_active,
+            "created_by": k.created_by,
+            "created_at": k.created_at.isoformat() if k.created_at else None,
+            "expires_at": k.expires_at.isoformat() if k.expires_at else None,
+        }
+        for k in keys
+    ]
+
+    pages = (total + page_size - 1) // page_size if total > 0 else 0
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "pages": pages,
+    }
+
+
+@router.patch("/api-keys/{api_key_id}")
+async def update_api_key(
+    api_key_id: int,
+    req: ApiKeyUpdate,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    _require_admin(current_user)
+    tenant_id = current_user.get("tenant_id")
+
+    result = await db.execute(
+        select(ApiKey).where(ApiKey.id == api_key_id, ApiKey.tenant_id == tenant_id)
+    )
+    api_key = result.scalar_one_or_none()
+    if not api_key:
+        raise HTTPException(status_code=404, detail="API key not found")
+
+    api_key.is_active = req.is_active
+    await db.flush()
+
+    await audit_log(
+        db,
+        actor=current_user["user_id"],
+        action="update_api_key",
+        entity_type="api_key",
+        entity_id=api_key_id,
+        details={"is_active": req.is_active},
+    )
+
+    return {
+        "id": api_key.id,
+        "name": api_key.name,
+        "key_prefix": api_key.key_prefix,
+        "role": api_key.role.value if hasattr(api_key.role, "value") else api_key.role,
+        "is_active": api_key.is_active,
+    }
+
+
+@router.delete("/api-keys/{api_key_id}")
+async def delete_api_key(
+    api_key_id: int,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    _require_admin(current_user)
+    tenant_id = current_user.get("tenant_id")
+
+    result = await db.execute(
+        select(ApiKey).where(ApiKey.id == api_key_id, ApiKey.tenant_id == tenant_id)
+    )
+    api_key = result.scalar_one_or_none()
+    if not api_key:
+        raise HTTPException(status_code=404, detail="API key not found")
+
+    await db.delete(api_key)
+    await db.flush()
+
+    await audit_log(
+        db,
+        actor=current_user["user_id"],
+        action="delete_api_key",
+        entity_type="api_key",
+        entity_id=api_key_id,
+    )
+
+    return {"success": True, "message": f"API key {api_key_id} deleted"}

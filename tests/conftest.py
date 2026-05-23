@@ -16,7 +16,7 @@ def event_loop():
 
 @pytest.fixture(scope="session")
 def http_client():
-    with httpx.Client(base_url=BASE_URL, timeout=10.0) as client:
+    with httpx.Client(base_url=BASE_URL, timeout=30.0) as client:
         yield client
 
 
@@ -28,6 +28,23 @@ def admin_token(http_client):
     resp = http_client.post(
         "/api/v1/auth/register",
         json={"username": username, "password": "test1234", "role": "admin"},
+    )
+    assert resp.status_code == 200
+    return resp.json()["access_token"]
+
+
+@pytest.fixture(scope="session")
+def superadmin_token(http_client):
+    import uuid
+
+    username = f"superadmin_test_{uuid.uuid4().hex[:8]}"
+    resp = http_client.post(
+        "/api/v1/auth/register",
+        json={
+            "username": username,
+            "password": "test1234",
+            "role": "superadmin",
+        },
     )
     assert resp.status_code == 200
     return resp.json()["access_token"]

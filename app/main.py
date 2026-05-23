@@ -11,6 +11,7 @@ from app.core.metrics_middleware import MetricsMiddleware
 from app.core.request_id_middleware import RequestIDMiddleware
 from app.core.deprecation_middleware import DeprecationMiddleware
 from app.core.tenant_middleware import TenantMiddleware
+from app.core.rate_limiter import RateLimitMiddleware
 from app.core.exceptions import register_exception_handlers
 from app.api.v1.routers import (
     auth,
@@ -92,6 +93,7 @@ def create_app() -> FastAPI:
     app.add_middleware(RequestIDMiddleware)
     app.add_middleware(DeprecationMiddleware)
     app.add_middleware(TenantMiddleware)
+    app.add_middleware(RateLimitMiddleware)
 
     register_exception_handlers(app)
 
