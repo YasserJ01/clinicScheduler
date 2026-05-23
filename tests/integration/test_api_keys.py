@@ -1,6 +1,3 @@
-import uuid
-
-
 class TestApiKeyManagement:
     def test_create_api_key(self, http_client, admin_token):
         headers = {"Authorization": f"Bearer {admin_token}"}

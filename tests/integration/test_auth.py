@@ -196,7 +196,8 @@ class TestPasswordReset:
         assert "reset" in resp.json()["message"].lower()
 
     def test_reset_password_full_flow(self, http_client):
-        import os, pathlib
+        import os
+        import pathlib
 
         from app.core.security import create_password_reset_token
 
