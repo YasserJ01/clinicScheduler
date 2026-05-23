@@ -110,6 +110,28 @@ class BookingResponse(BaseModel):
     appointment: AppointmentDetail | None = None
 
 
+class AppointmentForMeCreate(BaseModel):
+    doctor_id: int
+    time_slot: str
+    duration_minutes: int = 30
+
+    @field_validator("time_slot")
+    @classmethod
+    def validate_time_slot(cls, v: str) -> str:
+        try:
+            datetime.fromisoformat(v.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            raise ValueError("time_slot must be a valid ISO 8601 datetime string")
+        return v
+
+    @field_validator("duration_minutes")
+    @classmethod
+    def validate_duration(cls, v: int) -> int:
+        if v < 5 or v > 480:
+            raise ValueError("duration_minutes must be between 5 and 480 (8 hours)")
+        return v
+
+
 class NotesUpdate(BaseModel):
     notes: str
 
@@ -270,6 +292,9 @@ async def create_appointment(
             return JSONResponse(status_code=409, content=conflict_resp.model_dump())
         raise
 
+    new_appt.next_reminder_at = naive_time - timedelta(hours=24)
+    await db.flush()
+
     logger.info("Booking created: appt_id=%s on node %s", new_appt.id, NODE_ID)
     await audit_log(
         db,
@@ -305,6 +330,40 @@ async def create_appointment(
     }
     background_tasks.add_task(send_booking_confirmation, patient.email, appt_detail)
     return JSONResponse(status_code=201, content=booking.model_dump())
+
+
+@router.post("/for-me")
+async def book_for_me(
+    appt: AppointmentForMeCreate,
+    background_tasks: BackgroundTasks,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    tenant_id = current_user.get("tenant_id", 1)
+    username = current_user["user_id"]
+
+    user_result = await db.execute(
+        select(User).where(User.username == username, User.tenant_id == tenant_id)
+    )
+    user = user_result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    patient_result = await db.execute(select(Patient).where(Patient.user_id == user.id))
+    patient = patient_result.scalar_one_or_none()
+    if not patient:
+        raise HTTPException(
+            status_code=400,
+            detail="No patient profile linked to your account. Contact an admin.",
+        )
+
+    wrapped = AppointmentCreate(
+        doctor_id=appt.doctor_id,
+        patient_id=patient.id,
+        time_slot=appt.time_slot,
+        duration_minutes=appt.duration_minutes,
+    )
+    return await create_appointment(wrapped, background_tasks, current_user, db)
 
 
 @router.post("/recurring")
