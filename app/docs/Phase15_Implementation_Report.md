@@ -1,6 +1,6 @@
 # Phase 15 — Appointment Lifecycle Completions
 
-## Status: Active (Sub-Phase 15-B Complete)
+## Status: Active (Sub-Phase 15-C Complete)
 
 ---
 
@@ -90,11 +90,66 @@ This primes the `next_reminder_at` column for the reminder scheduler (15-C).
 
 ---
 
+## Sub-Phase 15-C: Reminder Scheduler Container ✅
+
+### Objective
+Wire up the dead reminder code (`send_reminder_email`, `get_due_reminders`, `mark_reminder_sent`) into a running standalone Docker container that polls every 5 minutes.
+
+### Changes
+
+#### 1. New Files
+
+**`app/scheduler/__init__.py`** — Empty package init.
+
+**`app/scheduler/reminders.py`** — Infinite-loop scheduler:
+- `send_due_reminders()` — Opens DB session, calls `get_due_reminders()`, sends email via `send_reminder_email()`, marks sent
+- `run_reminder_loop()` — Loops with 5-minute `asyncio.sleep`, handles exceptions gracefully
+- Module entry point: `python -m app.scheduler.reminders`
+
+**`app/scheduler/reminders_once.py`** — Single-run variant for K8s CronJob:
+- Calls `send_due_reminders()` once and exits
+
+#### 2. Repository (`app/db/repository.py`)
+- **`get_due_reminders()`** — Added `Appointment.next_reminder_at <= now` filter to respect the scheduling window
+- **`mark_reminder_sent()`** — Now also clears `next_reminder_at = None` after sending
+
+#### 3. Docker Compose (`docker-compose.yml`)
+Added new service:
+```yaml
+reminder-scheduler:
+  build: .
+  command: python -m app.scheduler.reminders
+  environment:
+    - DATABASE_URL=postgresql+asyncpg://clinic:clinicpass@db:5432/clinic_db
+    - REDIS_URL=redis://:redispass@redis:6379/0
+  depends_on:
+    db:
+      condition: service_healthy
+  networks:
+    - clinic-net
+  restart: unless-stopped
+```
+
+### Files Changed
+| File | Change |
+|---|---|
+| `app/scheduler/__init__.py` | New — package init |
+| `app/scheduler/reminders.py` | New — infinite-loop scheduler |
+| `app/scheduler/reminders_once.py` | New — single-run K8s variant |
+| `app/db/repository.py` | `get_due_reminders()` adds `next_reminder_at` filter; `mark_reminder_sent()` clears `next_reminder_at` |
+| `docker-compose.yml` | New `reminder-scheduler` service |
+
+### Tests
+- Full suite: **127 passed, 3 skipped** (pre-existing)
+- No regressions
+- Ruff format: clean
+
+---
+
 ## Upcoming Sub-Phases
 
 | Sub-Phase | Status | Estimate |
 |---|---|---|
-| 15-C: Reminder Scheduler Container | Pending | 2 days |
 | 15-D: Frontend Portal Completions | Pending | 2 days |
 | 15-E: Tests | Pending | 1 day |
 | **Total** | | **~7 days** |

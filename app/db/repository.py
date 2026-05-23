@@ -547,6 +547,7 @@ class AppointmentRepository:
             Appointment.appointment_time > now,
             Appointment.status.in_(["scheduled", "confirmed"]),
             Appointment.reminder_sent.is_(False),
+            Appointment.next_reminder_at <= now,
         ]
         if tenant_id is not None:
             where_clauses.append(Appointment.tenant_id == tenant_id)
@@ -560,6 +561,7 @@ class AppointmentRepository:
         appt = result.scalar_one_or_none()
         if appt:
             appt.reminder_sent = True
+            appt.next_reminder_at = None
             await self.session.flush()
 
     async def get_today_appointments(

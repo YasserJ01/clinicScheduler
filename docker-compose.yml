@@ -94,6 +94,21 @@ services:
       - clinic-net
     restart: unless-stopped
 
+  reminder-scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python -m app.scheduler.reminders
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://clinic:clinicpass@db:5432/clinic_db
+      - REDIS_URL=redis://:redispass@redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - clinic-net
+    restart: unless-stopped
+
   jaeger:
     image: jaegertracing/all-in-one:latest
     ports:
