@@ -17,7 +17,8 @@
         .card h2 { margin-bottom: 16px; color: #1e40af; }
         .form-group { margin-bottom: 16px; }
         .form-group label { display: block; margin-bottom: 6px; font-weight: 500; }
-        .form-group input, .form-group select { width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; }
+        .form-group input, .form-group select, .form-group textarea { width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; }
+        .form-group textarea { resize: vertical; }
         .btn { padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; }
         .btn-primary { background: #2563eb; color: white; }
         .btn-primary:hover { background: #1d4ed8; }
@@ -26,14 +27,19 @@
         .btn-secondary { background: #6b7280; color: white; }
         .btn-secondary:hover { background: #4b5563; }
         .btn-sm { padding: 6px 12px; font-size: 12px; }
-        .tabs { display: flex; gap: 8px; margin-bottom: 20px; }
+        .tabs { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
         .tab { padding: 10px 20px; border: none; background: #e5e7eb; border-radius: 6px 6px 0 0; cursor: pointer; }
         .tab.active { background: #2563eb; color: white; }
         .appointment-list { list-style: none; }
-        .appointment-item { padding: 16px; border: 1px solid #e5e7eb; border-radius: 8px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; }
+        .appointment-item { padding: 16px; border: 1px solid #e5e7eb; border-radius: 8px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: flex-start; }
         .appointment-item .details h3 { font-size: 1rem; margin-bottom: 4px; }
         .appointment-item .details p { color: #6b7280; font-size: 0.9rem; }
-        .status-badge { padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 500; }
+        .appointment-item .details .notes-text { margin-top: 6px; padding: 6px 10px; background: #f9fafb; border-radius: 4px; font-size: 0.85rem; color: #374151; border-left: 3px solid #2563eb; }
+        .profile-field { display: flex; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid #e5e7eb; }
+        .profile-field label { font-weight: 500; }
+        .profile-field span { color: #6b7280; }
+        .profile-edit input { margin-top: 4px; }
+        .status-badge { padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 500; display: inline-block; }
         .status-scheduled { background: #dbeafe; color: #1e40af; }
         .status-confirmed { background: #d1fae5; color: #065f46; }
         .status-completed { background: #e5e7eb; color: #374151; }
@@ -54,7 +60,11 @@
         .time-slot:hover { border-color: #2563eb; background: #eff6ff; }
         .time-slot.selected { background: #2563eb; color: white; border-color: #2563eb; }
         .time-slot.disabled { background: #f3f4f6; color: #9ca3af; cursor: not-allowed; }
+        .schedule-badge { display: inline-block; font-size: 0.8rem; padding: 2px 8px; border-radius: 10px; background: #fef3c7; color: #92400e; margin-top: 8px; }
         .loading { text-align: center; padding: 40px; color: #6b7280; }
+        .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+        .modal { background: white; border-radius: 10px; padding: 24px; max-width: 400px; width: 90%; }
+        .modal h3 { margin-bottom: 12px; }
     </style>
 </head>
 <body>
@@ -112,6 +122,7 @@
                 <button class="tab active" onclick="showTab('appointments')">My Appointments</button>
                 <button class="tab" onclick="showTab('book')">Book Appointment</button>
                 <button class="tab" onclick="showTab('doctors')">Doctors</button>
+                <button class="tab" onclick="showTab('profile')">Profile</button>
             </div>
             <div id="alert-container"></div>
 
@@ -148,6 +159,48 @@
                     <div id="doctors-list" class="loading">Loading...</div>
                 </div>
             </div>
+
+            <div id="profile-tab" class="hidden">
+                <div class="card">
+                    <h2>My Profile</h2>
+                    <div id="profile-view">
+                        <div class="profile-field"><label>Name</label><span id="profile-name">-</span></div>
+                        <div class="profile-field"><label>Email</label><span id="profile-email">-</span></div>
+                        <div class="profile-field"><label>Username</label><span id="profile-username">-</span></div>
+                        <div style="margin-top:16px">
+                            <button class="btn btn-secondary btn-sm" onclick="toggleProfileEdit()">Edit Profile</button>
+                        </div>
+                    </div>
+                    <div id="profile-edit-form" class="hidden">
+                        <div class="form-group">
+                            <label>Name</label>
+                            <input type="text" id="edit-name">
+                        </div>
+                        <div class="form-group">
+                            <label>Email</label>
+                            <input type="email" id="edit-email">
+                        </div>
+                        <div style="display:flex;gap:8px">
+                            <button class="btn btn-primary" onclick="saveProfile()">Save</button>
+                            <button class="btn btn-secondary" onclick="toggleProfileEdit()">Cancel</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="cancel-modal" class="modal-overlay hidden" onclick="closeCancelModal(event)">
+        <div class="modal" onclick="event.stopPropagation()">
+            <h3>Cancel Appointment</h3>
+            <p style="margin-bottom:12px;color:#6b7280">Please provide a reason for cancellation (optional):</p>
+            <div class="form-group">
+                <textarea id="cancel-reason" rows="3" placeholder="Reason for cancellation..."></textarea>
+            </div>
+            <div style="display:flex;gap:8px;justify-content:flex-end">
+                <button class="btn btn-secondary btn-sm" onclick="closeCancelModal()">Back</button>
+                <button class="btn btn-danger btn-sm" onclick="confirmCancel()">Confirm Cancel</button>
+            </div>
         </div>
     </div>
 
@@ -155,7 +208,8 @@
         const API_BASE = '/api/v1';
         let token = localStorage.getItem('token');
         let selectedSlot = null;
-        let patientId = null;
+        let currentPatient = null;
+        let cancelAppointmentId = null;
 
         async function api(path, options = {}) {
             const headers = { 'Content-Type': 'application/json', ...options.headers };
@@ -167,8 +221,14 @@
 
         function showAlert(msg, type = 'error') {
             const el = document.getElementById('alert-container');
-            el.innerHTML = `<div class="alert alert-${type}">${msg}</div>`;
+            el.innerHTML = `<div class="alert alert-${type}">${escapeHtml(msg)}</div>`;
             setTimeout(() => el.innerHTML = '', 4000);
+        }
+
+        function escapeHtml(str) {
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
         }
 
         function showAuthTab(tab) {
@@ -192,7 +252,7 @@
                 localStorage.setItem('token', token);
                 initPortal();
             } else {
-                document.getElementById('auth-alert').innerHTML = `<div class="alert alert-error">${data.detail || 'Login failed'}</div>`;
+                document.getElementById('auth-alert').innerHTML = `<div class="alert alert-error">${escapeHtml(data.detail || 'Login failed')}</div>`;
             }
         }
 
@@ -204,28 +264,22 @@
             const resp = await fetch(API_BASE + '/auth/register', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ username, password, role: 'patient' })
+                body: JSON.stringify({ username, password, role: 'patient', email })
             });
             const data = await resp.json();
             if (resp.ok) {
-                const patientResp = await fetch(API_BASE + '/patients', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${data.access_token}` },
-                    body: JSON.stringify({ name, email })
-                });
-                if (patientResp.ok) {
-                    token = data.access_token;
-                    localStorage.setItem('token', token);
-                    initPortal();
-                }
+                token = data.access_token;
+                localStorage.setItem('token', token);
+                initPortal();
             } else {
-                document.getElementById('auth-alert').innerHTML = `<div class="alert alert-error">${data.detail || 'Registration failed'}</div>`;
+                document.getElementById('auth-alert').innerHTML = `<div class="alert alert-error">${escapeHtml(data.detail || 'Registration failed')}</div>`;
             }
         }
 
         function logout() {
             token = null;
             localStorage.removeItem('token');
+            currentPatient = null;
             document.getElementById('auth-view').classList.remove('hidden');
             document.getElementById('portal-view').classList.add('hidden');
         }
@@ -236,15 +290,23 @@
             document.getElementById('appointments-tab').classList.toggle('hidden', tab !== 'appointments');
             document.getElementById('book-tab').classList.toggle('hidden', tab !== 'book');
             document.getElementById('doctors-tab').classList.toggle('hidden', tab !== 'doctors');
+            document.getElementById('profile-tab').classList.toggle('hidden', tab !== 'profile');
             if (tab === 'appointments') loadAppointments();
             if (tab === 'book') loadDoctorsForBooking();
             if (tab === 'doctors') loadDoctors();
+            if (tab === 'profile') loadProfile();
         }
 
         async function initPortal() {
             document.getElementById('auth-view').classList.add('hidden');
             document.getElementById('portal-view').classList.remove('hidden');
-            document.getElementById('user-display').textContent = 'Patient';
+            const meResp = await api('/patients/me');
+            if (meResp && meResp.ok) {
+                currentPatient = await meResp.json();
+                document.getElementById('user-display').textContent = currentPatient.name || 'Patient';
+            } else {
+                document.getElementById('user-display').textContent = 'Patient';
+            }
             loadAppointments();
         }
 
@@ -263,24 +325,42 @@
                 <li class="appointment-item">
                     <div class="details">
                         <h3>Doctor #${a.doctor_id}</h3>
-                        <p>${new Date(a.appointment_time).toLocaleString()}</p>
-                        <p>${a.duration_minutes} min</p>
+                        <p>${new Date(a.appointment_time).toLocaleString()} &middot; ${a.duration_minutes} min</p>
+                        ${a.notes ? `<div class="notes-text">${escapeHtml(a.notes)}</div>` : ''}
                     </div>
-                    <div style="display:flex;align-items:center;gap:12px">
+                    <div style="display:flex;align-items:center;gap:12px;flex-shrink:0">
                         <span class="status-badge status-${a.status}">${a.status}</span>
-                        ${a.status === 'scheduled' ? `<button class="btn btn-danger btn-sm" onclick="cancelAppointment(${a.id})">Cancel</button>` : ''}
+                        ${a.status === 'scheduled' ? `<button class="btn btn-danger btn-sm" onclick="openCancelModal(${a.id})">Cancel</button>` : ''}
                     </div>
                 </li>
             `).join('') + '</ul>';
         }
 
-        async function cancelAppointment(id) {
-            if (!confirm('Cancel this appointment?')) return;
-            const resp = await api(`/appointments/${id}/status`, { method: 'PATCH', body: JSON.stringify({status: 'cancelled'}) });
+        function openCancelModal(id) {
+            cancelAppointmentId = id;
+            document.getElementById('cancel-reason').value = '';
+            document.getElementById('cancel-modal').classList.remove('hidden');
+        }
+
+        function closeCancelModal(e) {
+            if (e && e.target !== e.currentTarget) return;
+            document.getElementById('cancel-modal').classList.add('hidden');
+            cancelAppointmentId = null;
+        }
+
+        async function confirmCancel() {
+            if (!cancelAppointmentId) return;
+            const reason = document.getElementById('cancel-reason').value.trim() || null;
+            const resp = await api(`/appointments/${cancelAppointmentId}/status`, {
+                method: 'PATCH',
+                body: JSON.stringify({ status: 'cancelled', cancellation_reason: reason })
+            });
             if (resp && resp.ok) {
                 showAlert('Appointment cancelled', 'success');
                 loadAppointments();
             }
+            document.getElementById('cancel-modal').classList.add('hidden');
+            cancelAppointmentId = null;
         }
 
         async function loadDoctorsForBooking() {
@@ -289,7 +369,7 @@
             const data = await resp.json();
             const select = document.getElementById('book-doctor');
             select.innerHTML = '<option value="">-- Choose a doctor --</option>' +
-                (data.items || []).map(d => `<option value="${d.id}">${d.name} - ${d.specialty}</option>`).join('');
+                (data.items || []).map(d => `<option value="${d.id}">${escapeHtml(d.name)} - ${escapeHtml(d.specialty)}</option>`).join('');
         }
 
         async function loadAvailableSlots() {
@@ -308,8 +388,13 @@
                 container.innerHTML = '<p style="color:#6b7280">No available slots for this date</p>';
                 return;
             }
-            container.innerHTML = '<p style="margin-bottom:8px;font-weight:500">Available Times:</p><div class="time-slots">' +
+            let html = '<p style="margin-bottom:8px;font-weight:500">Available Times:</p>';
+            if (data.schedule_based) {
+                html += '<div class="schedule-badge">Based on doctor schedule</div>';
+            }
+            html += '<div class="time-slots">' +
                 slots.map(s => `<div class="time-slot" onclick="selectSlot('${s}', this)">${s}</div>`).join('') + '</div>';
+            container.innerHTML = html;
         }
 
         function selectSlot(slot, el) {
@@ -324,9 +409,9 @@
             const date = document.getElementById('book-date').value;
             if (!selectedSlot) return;
             const timeSlot = `${date}T${selectedSlot}:00Z`;
-            const resp = await api('/appointments', {
+            const resp = await api('/appointments/for-me', {
                 method: 'POST',
-                body: JSON.stringify({ doctor_id: parseInt(doctorId), patient_id: patientId || 1, time_slot: timeSlot })
+                body: JSON.stringify({ doctor_id: parseInt(doctorId), time_slot: timeSlot })
             });
             if (resp && resp.ok) {
                 showAlert('Appointment booked successfully!', 'success');
@@ -348,10 +433,60 @@
             const doctors = data.items || [];
             el.innerHTML = '<div class="doctor-grid">' + doctors.map(d => `
                 <div class="doctor-card">
-                    <h3>${d.name}</h3>
-                    <p>${d.specialty}</p>
+                    <h3>${escapeHtml(d.name)}</h3>
+                    <p>${escapeHtml(d.specialty)}</p>
                 </div>
             `).join('') + '</div>';
+        }
+
+        async function loadProfile() {
+            if (currentPatient) {
+                document.getElementById('profile-name').textContent = currentPatient.name || '-';
+                document.getElementById('profile-email').textContent = currentPatient.email || '-';
+            }
+            const payload = token ? JSON.parse(atob(token.split('.')[1])) : {};
+            document.getElementById('profile-username').textContent = payload.sub || '-';
+            document.getElementById('profile-edit-form').classList.add('hidden');
+            document.getElementById('profile-view').classList.remove('hidden');
+        }
+
+        function toggleProfileEdit() {
+            const editForm = document.getElementById('profile-edit-form');
+            const view = document.getElementById('profile-view');
+            if (editForm.classList.contains('hidden')) {
+                document.getElementById('edit-name').value = currentPatient ? currentPatient.name : '';
+                document.getElementById('edit-email').value = currentPatient ? currentPatient.email : '';
+                view.classList.add('hidden');
+                editForm.classList.remove('hidden');
+            } else {
+                view.classList.remove('hidden');
+                editForm.classList.add('hidden');
+            }
+        }
+
+        async function saveProfile() {
+            if (!currentPatient) return;
+            const name = document.getElementById('edit-name').value.trim();
+            const email = document.getElementById('edit-email').value.trim();
+            const body = {};
+            if (name) body.name = name;
+            if (email) body.email = email;
+            const resp = await api(`/patients/${currentPatient.id}`, {
+                method: 'PATCH',
+                body: JSON.stringify(body)
+            });
+            if (resp && resp.ok) {
+                const updated = await resp.json();
+                currentPatient = updated;
+                document.getElementById('profile-name').textContent = updated.name || '-';
+                document.getElementById('profile-email').textContent = updated.email || '-';
+                document.getElementById('user-display').textContent = updated.name || 'Patient';
+                toggleProfileEdit();
+                showAlert('Profile updated', 'success');
+            } else {
+                const data = resp ? await resp.json() : {};
+                showAlert(data.detail || 'Failed to update profile');
+            }
         }
 
         if (token) {
