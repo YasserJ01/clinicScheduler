@@ -1,0 +1,53 @@
+name: Rollback to Blue
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "rollback" to confirm'
+        required: true
+        default: ""
+        type: string
+
+jobs:
+  rollback:
+    if: ${{ github.event.inputs.confirm == 'rollback' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: "latest"
+
+      - name: Set K8s context
+        run: |
+          mkdir -p $HOME/.kube
+          echo "${{ secrets.KUBECONFIG }}" | base64 -d > $HOME/.kube/config
+
+      - name: Scale blue back to 3 replicas
+        run: |
+          kubectl scale deployment/clinic-worker-blue \
+            -n clinic-scheduler --replicas=3
+
+      - name: Wait for blue rollout
+        run: |
+          kubectl rollout status deployment/clinic-worker-blue \
+            -n clinic-scheduler --timeout=180s
+
+      - name: Switch main service back to blue
+        run: |
+          kubectl patch service clinic-worker -n clinic-scheduler \
+            -p '{"spec":{"selector":{"app":"clinic-worker","version":"blue"}}}'
+
+      - name: Scale down green deployment
+        run: |
+          kubectl scale deployment/clinic-worker-green \
+            -n clinic-scheduler --replicas=0
+
+      - name: Notify rollback complete
+        run: |
+          echo "=== Rollback complete ==="
+          echo "Traffic routed back to blue deployment"
+          echo "Green deployment scaled to 0"

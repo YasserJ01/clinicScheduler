@@ -1,0 +1,84 @@
+name: Blue-Green Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Docker image tag to deploy"
+        required: true
+        default: "green"
+        type: string
+
+jobs:
+  deploy-green:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: "latest"
+
+      - name: Set K8s context
+        run: |
+          mkdir -p $HOME/.kube
+          echo "${{ secrets.KUBECONFIG }}" | base64 -d > $HOME/.kube/config
+
+      - name: Build and push green image
+        run: |
+          docker build -t clinic-scheduler-worker:${{ inputs.image_tag }} .
+          docker tag clinic-scheduler-worker:${{ inputs.image_tag }} \
+            ${{ secrets.DOCKER_REGISTRY }}/clinic-scheduler-worker:${{ inputs.image_tag }}
+          docker push ${{ secrets.DOCKER_REGISTRY }}/clinic-scheduler-worker:${{ inputs.image_tag }}
+
+      - name: Scale green to 0 (ensure clean state)
+        run: |
+          kubectl scale deployment/clinic-worker-green \
+            -n clinic-scheduler --replicas=0 || true
+
+      - name: Update green image
+        run: |
+          kubectl set image deployment/clinic-worker-green \
+            -n clinic-scheduler worker=${{ secrets.DOCKER_REGISTRY }}/clinic-scheduler-worker:${{ inputs.image_tag }}
+
+      - name: Scale green to 3 replicas
+        run: |
+          kubectl scale deployment/clinic-worker-green \
+            -n clinic-scheduler --replicas=3
+
+      - name: Wait for green rollout
+        run: |
+          kubectl rollout status deployment/clinic-worker-green \
+            -n clinic-scheduler --timeout=180s
+
+      - name: Run smoke tests against green
+        run: |
+          chmod +x scripts/smoke-test.sh
+          ./scripts/smoke-test.sh "http://clinic-worker-green:8000"
+
+      - name: Switch main service to green
+        run: |
+          kubectl patch service clinic-worker -n clinic-scheduler \
+            -p '{"spec":{"selector":{"app":"clinic-worker","version":"green"}}}'
+
+      - name: Scale down blue deployment
+        run: |
+          kubectl scale deployment/clinic-worker-blue \
+            -n clinic-scheduler --replicas=0
+
+      - name: Notify success
+        if: success()
+        run: |
+          echo "=== Blue-Green deploy complete ==="
+          echo "Version: ${{ inputs.image_tag }}"
+          echo "Traffic now routed to green deployment"
+
+      - name: Rollback on failure
+        if: failure()
+        run: |
+          echo "=== Smoke tests failed — rolling back ==="
+          kubectl scale deployment/clinic-worker-green \
+            -n clinic-scheduler --replicas=0
+          echo "Green deployment scaled to 0. Blue deployment unchanged."
+          echo "Investigate: kubectl logs -n clinic-scheduler deployment/clinic-worker-green"

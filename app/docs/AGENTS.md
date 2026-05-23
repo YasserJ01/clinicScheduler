@@ -225,11 +225,68 @@ kubectl annotate externalsecret clinic-scheduler-secrets force-sync=$(date +%s)
 kubectl get secret clinic-scheduler-secrets -o jsonpath='{.data.SECRET_KEY}' | base64 -d
 
 # 4. Roll workers to pick up new secret
-kubectl rollout restart deployment/clinic-worker
+kubectl rollout restart deployment/clinic-worker-blue
 
 # For Docker Compose:
 # 1. Edit .env with new value
 # 2. Rebuild and restart: docker compose up -d --build
+```
+
+### Blue-Green Deployment (Phase 17-C)
+
+#### Architecture
+- Two long-lived deployments: `clinic-worker-blue` (3 replicas) and `clinic-worker-green` (0 replicas).
+- Main service `clinic-worker` selects `version: blue` — all production traffic hits blue.
+- Green service `clinic-worker-green` selects `version: green` — used for smoke tests before cutover.
+- Ingress points to `clinic-worker` service — no ingress changes during deploy.
+
+#### Deploy Workflow (`.github/workflows/deploy-blue-green.yml`)
+1. **Build & push** `clinic-scheduler-worker:green` to registry
+2. **Scale green to 0** (clean state)
+3. **Update green image** tag
+4. **Scale green to 3** replicas
+5. **Wait for rollout** (readiness probes, 180s timeout)
+6. **Smoke tests** against `clinic-worker-green` service (health, docs, metrics)
+7. **Switch** `clinic-worker` service selector to `version: green`
+8. **Scale blue to 0**
+9. On failure: green scaled to 0, blue unchanged
+
+#### Rollback Workflow (`.github/workflows/rollback.yml`)
+- Manual trigger with `confirm: rollback` input.
+- Scales blue to 3, waits ready, switches service selector back to `version: blue`, scales green to 0.
+
+#### Smoke Tests (`scripts/smoke-test.sh`)
+- Validates: health endpoint (200), Swagger UI (200), metrics endpoint (200).
+- Exits non-zero on any failure — prevents service cutover.
+
+#### Manifests
+| File | Purpose |
+|---|---|
+| `k8s/deployment-worker.yaml` | Blue deployment (`version: blue`, 3 replicas) |
+| `k8s/deployment-green.yaml` | Green deployment (`version: green`, 0 replicas) |
+| `k8s/service-worker.yaml` | Main service (selector: `version: blue` initially) |
+| `k8s/service-worker-green.yaml` | Green service for pre-switch smoke tests |
+| `.github/workflows/deploy-blue-green.yml` | Blue-green deploy automation |
+| `.github/workflows/rollback.yml` | Emergency rollback to blue |
+| `scripts/smoke-test.sh` | Health check suite for green validation |
+
+#### Commands
+```bash
+# Manual deploy
+kubectl set image deployment/clinic-worker-green -n clinic-scheduler worker=clinic-scheduler-worker:green
+kubectl scale deployment/clinic-worker-green -n clinic-scheduler --replicas=3
+kubectl rollout status deployment/clinic-worker-green -n clinic-scheduler --timeout=180s
+./scripts/smoke-test.sh http://clinic-worker-green:8000
+kubectl patch service clinic-worker -n clinic-scheduler \
+  -p '{"spec":{"selector":{"app":"clinic-worker","version":"green"}}}'
+kubectl scale deployment/clinic-worker-blue -n clinic-scheduler --replicas=0
+
+# Rollback
+kubectl scale deployment/clinic-worker-blue -n clinic-scheduler --replicas=3
+kubectl rollout status deployment/clinic-worker-blue -n clinic-scheduler --timeout=180s
+kubectl patch service clinic-worker -n clinic-scheduler \
+  -p '{"spec":{"selector":{"app":"clinic-worker","version":"blue"}}}'
+kubectl scale deployment/clinic-worker-green -n clinic-scheduler --replicas=0
 ```
 
 ### Alembic Migrations (Phase 6, updated Phase 7)

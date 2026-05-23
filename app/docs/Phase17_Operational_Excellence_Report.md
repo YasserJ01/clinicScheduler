@@ -1,6 +1,6 @@
 # Phase 17 — Operational Excellence
 
-## Status: Active (Sub-Phase 17-B Complete)
+## Status: Active (Sub-Phase 17-C Complete)
 
 ---
 
@@ -201,11 +201,95 @@ Existing `.env` file unchanged — `.env.example` serves as documentation.
 
 ---
 
+## Sub-Phase 17-C: Blue-Green Deployment ✅
+
+### Objective
+Replace the rolling update strategy with a blue-green deployment model that provides zero-downtime releases, smoke-test validation before traffic cutover, and instant rollback capability.
+
+### Changes
+
+#### 1. Kubernetes Manifests
+
+**`k8s/deployment-worker.yaml`** — Updated to serve as the **blue** deployment:
+- Renamed from `clinic-worker` to `clinic-worker-blue`
+- Added `version: blue` label to metadata, selector, and pod template
+- Maintains 3 replicas for production traffic
+
+**`k8s/deployment-green.yaml`** — New **green** deployment:
+- Name: `clinic-worker-green` with `version: green` label
+- Image: `clinic-scheduler-worker:green` (tagged by CI)
+- Replicas: 0 (scaled up during deploy, scaled down after cutover)
+
+**`k8s/service-worker.yaml`** — Updated with version selector:
+- Selector: `app: clinic-worker, version: blue`
+- The Ingress (`k8s/ingress.yaml`) continues to reference `clinic-worker` — no ingress changes needed
+
+**`k8s/service-worker-green.yaml`** — New green service:
+- Selector: `app: clinic-worker, version: green`
+- Used exclusively for pre-switch smoke tests
+- Not exposed via Ingress
+
+#### 2. Smoke Tests (`scripts/smoke-test.sh`)
+- Validates 3 endpoints against the green deployment before cutover:
+  - `GET /api/v1/health` → 200
+  - `GET /docs` → 200
+  - `GET /api/v1/metrics` → 200
+- Exits non-zero on any failure, preventing the service switch
+
+#### 3. CI/CD Workflows
+
+**`.github/workflows/deploy-blue-green.yml`** — Blue-green deploy:
+1. Build and push `clinic-scheduler-worker:green` to Docker registry
+2. Scale green to 0 (ensure clean state)
+3. Set green image to new tag
+4. Scale green to 3 replicas
+5. Wait for rollout (readiness probes, 180s timeout)
+6. Run smoke tests against `clinic-worker-green:8000`
+7. Patch `clinic-worker` service selector to `version: green`
+8. Scale blue to 0
+9. **On failure**: green scaled to 0, alert team, blue unchanged
+
+**`.github/workflows/rollback.yml`** — Emergency rollback:
+- Manual trigger with `confirm: rollback` input (safety gate)
+1. Scale blue to 3 replicas
+2. Wait for blue rollout (readiness probes, 180s timeout)
+3. Patch service selector back to `version: blue`
+4. Scale green to 0
+
+#### 4. Agent Documentation (`app/docs/AGENTS.md`)
+- Added full Blue-Green Deployment section covering architecture, workflow steps, manifest map, and manual commands for both deploy and rollback
+- Updated all `kubectl rollout restart deployment/clinic-worker` references to `clinic-worker-blue`
+
+### Key Design Decisions
+- **Two long-lived deployments**: Blue and green both exist permanently. Blue runs production (3 replicas), green sits at 0 until deploy time. This avoids cold-start delays.
+- **Service selector patch** (not separate service): The main `clinic-worker` service switches its selector from `version: blue` to `version: green`. The Ingress never changes — it always points to `clinic-worker`.
+- **Green service for smoke tests**: `clinic-worker-green` is a separate ClusterIP service that always selects `version: green`. This allows smoke tests to hit green before any traffic is routed to it.
+- **Rollback safety gate**: The rollback workflow requires explicit `confirm: rollback` input to prevent accidental rollbacks.
+- **No HPA changes needed**: Both blue and green deployments use the same HPA configuration (if enabled). Only one is active at a time.
+
+### Files Changed
+| File | Change |
+|---|---|
+| `k8s/deployment-worker.yaml` | Renamed to `clinic-worker-blue`, added `version: blue` label |
+| `k8s/deployment-green.yaml` | New — green deployment with `version: green`, 0 replicas |
+| `k8s/service-worker.yaml` | Added `version: blue` to selector |
+| `k8s/service-worker-green.yaml` | New — green service for smoke tests |
+| `scripts/smoke-test.sh` | New — health check suite for green validation |
+| `.github/workflows/deploy-blue-green.yml` | New — blue-green deploy automation |
+| `.github/workflows/rollback.yml` | New — emergency rollback to blue |
+| `app/docs/AGENTS.md` | Added blue-green section, updated rollout commands |
+
+### Tests
+- Full suite: **211 passed, 5 skipped, 0 failed** (unchanged — YAML/markdown only changes)
+- No regressions
+- Ruff format: no Python files changed
+
+---
+
 ## Upcoming Sub-Phases
 
 | Sub-Phase | Status | Description |
 |---|---|---|
-| 17-C: Blue-Green Deployment | Pending | CI/CD zero-downtime deploy |
 | 17-D: SLA Monitoring + Error Budget | Pending | Grafana SLO dashboards |
 | 17-E: Full DR Test | Pending | Documented and tested DR |
 | 17-F: NGINX Config Hardening | Pending | Round-robin, rate limit tuning |

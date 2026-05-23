@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: clinic-worker
+  name: clinic-worker-green
   namespace: clinic-scheduler
   labels:
     app: clinic-worker
@@ -9,7 +9,7 @@ spec:
   type: ClusterIP
   selector:
     app: clinic-worker
-    version: blue
+    version: green
   ports:
     - port: 8000
       targetPort: 8000

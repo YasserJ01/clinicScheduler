@@ -1,26 +1,26 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: clinic-worker-blue
+  name: clinic-worker-green
   namespace: clinic-scheduler
   labels:
     app: clinic-worker
-    version: blue
+    version: green
 spec:
-  replicas: 3
+  replicas: 0
   selector:
     matchLabels:
       app: clinic-worker
-      version: blue
+      version: green
   template:
     metadata:
       labels:
         app: clinic-worker
-        version: blue
+        version: green
     spec:
       containers:
         - name: worker
-          image: clinic-scheduler-worker:latest
+          image: clinic-scheduler-worker:green
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000
