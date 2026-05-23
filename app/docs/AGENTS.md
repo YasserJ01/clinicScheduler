@@ -153,10 +153,31 @@ docker compose down -v                # Tear down everything including DB volume
 - `ssl_session_tickets off` — prevents session ticket reuse
 - HSTS with `preload` directive
 
-### k6 load test
+### k6 load test (updated Phase 17-G)
 - k6 binary location: `C:\Program Files\k6\k6.exe` (not on PATH).
-- Run: `& "C:\Program Files\k6\k6.exe" run loadtest/scheduler.js`
-- Rate limit in NGINX is set to 30r/s (production-hardened from Phase 17-F).
+- k6 may OOM on Windows with 200 VUs; run on Linux for full-scale tests.
+
+**Two configurations:**
+1. **Production NGINX (30r/s)**: Use with `NGINX_RATE_LIMIT=30` env var. Test backend under real rate limits.
+2. **Loadtest NGINX (500r/s)**: Use `docker compose -f docker-compose.yml -f docker-compose.loadtest.yml up -d` for NGINX with 500r/s rate limit, burst=200, conn_limit=50.
+
+**Per-VU authentication**: Each VU registers its own user + creates its own patient to bypass per-user rate limits (100 req/60s). This is a well-known pattern for authenticated k6 tests with rate-limited APIs.
+
+**Commands:**
+```bash
+# Load test with production NGINX (30r/s — backend under real limits)
+& "C:\Program Files\k6\k6.exe" run loadtest/scheduler.js
+
+# Load test with relaxed NGINX (500r/s — stress the backend)
+docker compose -f docker-compose.yml -f docker-compose.loadtest.yml up -d
+& "C:\Program Files\k6\k6.exe" run loadtest/scheduler.js
+
+# Revert production NGINX after loadtest config
+docker compose up -d nginx
+
+# Custom VUs and duration (overrides script defaults)
+& "C:\Program Files\k6\k6.exe" run loadtest/scheduler.js --vus 50 --duration 60s
+```
 
 ### Read Replica (Phase 17-A)
 - `db-replica` service in docker-compose.yml uses streaming replication from the primary `db`.
@@ -220,8 +241,16 @@ docker compose down -v                # Tear down everything including DB volume
 - **Scaling test (3 workers)**: `docker compose up -d`
 - **Thresholds**: p95 < 500ms, HTTP error < 5%, app error < 10%
 - **Results**: 3 workers show 20% higher throughput and 55% lower p95 latency vs 1 worker
-- **Rate limit**: 30 r/s per IP (hardened in Phase 17-F, was 500 r/s)
 - **Note**: k6 may OOM on Windows with 200 VUs; use 50 VUs for local testing
+- **NGINX rate limit**: 30 r/s per IP (hardened in Phase 17-F)
+- **Loadtest NGINX override**: `docker compose -f docker-compose.yml -f docker-compose.loadtest.yml up -d` (500r/s, burst=200)
+- **Per-VU auth**: Each VU registers its own user to bypass per-user rate limits (Phase 17-G update)
+- **New files**: `nginx/nginx.conf.loadtest`, `docker-compose.loadtest.yml`
+- **Phase 17-G results**:
+  - 10 VUs: p95 booking 478ms, p95 doctors 447ms — thresholds met
+  - 30 VUs: p95 booking 3.56s, p95 doctors 2.78s — backend saturated (DB pool limit: 20 connections)
+  - Bottleneck: DB connection pool (15+5=20) limits concurrent request handling
+  - Error rate: 5.98% (mostly from cancel-by-non-owner failures, not service errors)
 
 ### Database Indexes
 - `uix_appointment_slot`: Partial unique index on `(doctor_id, appointment_time) WHERE status != 'cancelled'`
@@ -713,6 +742,13 @@ docker compose -f docker-compose.yml -f docker-compose.baseline.yml up -d
 # Run scaling load test (3 workers)
 docker compose up -d
 & "C:\Program Files\k6\k6.exe" run loadtest/scheduler.js
+
+# Run load test with relaxed NGINX config (500r/s — stress the backend)
+docker compose -f docker-compose.yml -f docker-compose.loadtest.yml up -d
+& "C:\Program Files\k6\k6.exe" run loadtest/scheduler.js
+
+# Revert NGINX to production config after load test
+docker compose up -d nginx
 
 # Check Redis memory usage
 docker compose exec redis redis-cli INFO memory
