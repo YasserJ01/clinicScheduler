@@ -192,10 +192,45 @@ docker compose down -v                # Tear down everything including DB volume
 - For staging: generate self-signed cert with `openssl req -x509 ...` and mount in NGINX.
 - For production: use Let's Encrypt (certbot) with automated renewal.
 
-### SECRET_KEY Rotation (Phase 5)
+### Secrets Management (Phase 17-B)
+
+#### Kubernetes — External Secrets Operator
+- Production K8s secrets are managed by [External Secrets Operator](https://external-secrets.io) with HashiCorp Vault.
+- **ClusterSecretStore**: `k8s/cluster-secret-store.yaml` — points to Vault at `https://vault.cluster.internal:8200`, path `clinic-scheduler/production`, with Kubernetes auth.
+- **ExternalSecret**: `k8s/external-secret.yaml` — syncs `SECRET_KEY`, `DB_PASSWORD`, `REDIS_PASSWORD`, `SENDGRID_API_KEY`, `SMTP_HOST`, `SMTP_PORT`, `FROM_EMAIL` from Vault.
+- The old `k8s/secret.yaml` is kept as a fallback template for development and is annotated as deprecated.
+- Apply: `kubectl apply -f k8s/cluster-secret-store.yaml -f k8s/external-secret.yaml`
+
+#### Docker Compose — `.env` file
+- Copy `.env.example` to `.env` and fill in values.
+- `docker-compose.yml` uses `${VAR:-default}` syntax for optional vars.
+- `docker-compose.prod.yml` uses `${VAR:?error}` syntax — fails fast if required vars are missing.
+- `.env` is in `.gitignore`. Never commit it.
+
+#### SECRET_KEY Rotation
 - Generate new key: `python -c "import secrets; print(secrets.token_hex(32))"`
 - Changing key invalidates all existing JWTs (users must re-authenticate).
 - For zero-downtime rotation: implement dual-key validation with fallback period.
+
+#### Full Secret Rotation Procedure
+```bash
+# 1. Update secret in Vault
+vault kv put clinic-scheduler/production SECRET_KEY=$(python -c "import secrets; print(secrets.token_hex(32))")
+
+# 2. Wait for External Secrets Operator refresh (default 1h interval)
+#    Or force immediate refresh:
+kubectl annotate externalsecret clinic-scheduler-secrets force-sync=$(date +%s)
+
+# 3. Verify new secret is propagated
+kubectl get secret clinic-scheduler-secrets -o jsonpath='{.data.SECRET_KEY}' | base64 -d
+
+# 4. Roll workers to pick up new secret
+kubectl rollout restart deployment/clinic-worker
+
+# For Docker Compose:
+# 1. Edit .env with new value
+# 2. Rebuild and restart: docker compose up -d --build
+```
 
 ### Alembic Migrations (Phase 6, updated Phase 7)
 - Development: `init_db()` uses `create_all` (default).
