@@ -89,7 +89,7 @@ The Clinic Scheduler is a stateless, horizontally scalable REST API service depl
                             │ HTTP/HTTPS :80
 ┌───────────────────────────▼────────────────────────────────────┐
 │                     NGINX Reverse Proxy                        │
-│        Consistent-hashing LB · Rate limiting 500 r/s          │
+│        Round-robin LB · Rate limiting 30 r/s                   │
 │        Retry on 502/503 · TLS termination (future)            │
 └────────┬───────────────────┬───────────────────┬───────────────┘
          │                   │                   │
@@ -163,7 +163,7 @@ The system SHALL allow any visitor to register with a unique username, a plainte
 The system SHALL authenticate registered users via username and password. On success, the system SHALL return a fresh JWT. On failure, the system SHALL return HTTP 401 with a human-readable error message.
 
 **FR-AUTH-3 — Token Expiry**
-JWTs SHALL expire after a configurable interval (default: 30 minutes). Expired tokens SHALL be rejected with HTTP 401.
+JWTs SHALL expire after a configurable interval (default: 15 minutes). A refresh token (default: 7 days) SHALL be provided alongside the access token to obtain new credentials without re-authentication. Expired tokens SHALL be rejected with HTTP 401.
 
 **FR-AUTH-4 — Role-Based Access Control**
 Every protected endpoint SHALL validate the `Authorization: Bearer <token>` header. The decoded JWT payload SHALL contain the `sub` (username) and `role` claims. Endpoints that require elevated roles SHALL return HTTP 403 if the caller's role is insufficient.
@@ -174,7 +174,7 @@ Passwords SHALL never be stored in plaintext. The system SHALL use bcrypt (cost 
 ### 4.2 Doctor Management (DOC)
 
 **FR-DOC-1 — List Active Doctors**
-Any authenticated user SHALL be able to retrieve a list of all active doctors (where `is_active = 'true'`), including each doctor's `id`, `name`, and `specialty`.
+Any authenticated user SHALL be able to retrieve a list of all active doctors (where `is_active = true`), including each doctor's `id`, `name`, and `specialty`.
 
 **FR-DOC-2 — Create Doctor**
 Only users with the `admin` role SHALL be able to create a new doctor record. The creation request SHALL include `name` and `specialty`. A successful creation SHALL return HTTP 201 and the created doctor object.
@@ -283,7 +283,7 @@ The HTTP error rate (non-2xx and non-4xx client errors) SHALL remain below 5% du
 Each worker SHALL maintain an async SQLAlchemy connection pool with `pool_size=20`, `max_overflow=10`, and `pool_timeout=10s`. Connection recycle SHALL occur every 1,800 seconds to prevent stale connections.
 
 **NFR-PERF-4 — NGINX Rate Limiting**
-NGINX SHALL enforce a rate limit of 500 requests/second per client IP for the `/api/` location block, with a burst allowance of 50 and `nodelay` to prevent queuing at the proxy layer. The rate SHOULD be reduced to approximately 30 r/s for production deployments.
+NGINX SHALL enforce a rate limit of 30 requests/second per client IP for the `/api/` location block, with a burst allowance of 50 and `nodelay` to prevent queuing at the proxy layer. A higher rate (500 r/s, burst=200) is available during load testing via `nginx/nginx.conf.loadtest`.
 
 **NFR-PERF-5 — Proxy Timeouts**
 NGINX SHALL enforce a connect timeout of 3 seconds, a send timeout of 5 seconds, and a read timeout of 10 seconds. Requests failing with HTTP 502 or 503 SHALL be retried on the next available upstream node (max 2 attempts).
@@ -340,7 +340,7 @@ The application process inside the container SHALL run as the non-root `appuser`
 ### 5.4 Scalability (NFR-SCALE)
 
 **NFR-SCALE-1 — Horizontal Scaling**
-The number of worker replicas SHALL be configurable via Docker Compose `deploy.replicas` without code changes. NGINX consistent hashing SHALL distribute traffic across all healthy replicas.
+The number of worker replicas SHALL be configurable via Docker Compose `deploy.replicas` without code changes. NGINX round-robin load balancing SHALL distribute traffic across all healthy replicas.
 
 **NFR-SCALE-2 — Stateless Workers**
 Workers SHALL hold no in-memory application state. All shared state (appointments, users, patients, doctors) SHALL be persisted in PostgreSQL. Workers MAY cache read-heavy data in Redis but SHALL NOT rely on Redis for write correctness.
@@ -415,7 +415,7 @@ In production, container stdout logs SHOULD be collected by a log aggregator (e.
 
 The system is packaged as a Docker Compose multi-service application consisting of:
 
-- **nginx** — ingress, TLS termination (future), consistent-hash load balancing, rate limiting
+- **nginx** — ingress, TLS termination (future), round-robin load balancing, rate limiting
 - **worker** (×3 replicas) — stateless FastAPI application processes
 - **db** — single PostgreSQL 16 instance (HA failover is a future concern)
 - **redis** — single Redis 7 instance for caching and future pub-sub notifications
@@ -425,7 +425,7 @@ All services communicate over the `clinic-net` Docker bridge network using Docke
 ### 6.2 Request Lifecycle
 
 ```
-Client → NGINX (/api/) → consistent-hash → Worker N
+Client → NGINX (/api/) → round-robin → Worker N
   → FastAPI middleware (MessagePack, timing header)
   → JWT validation (dependencies.py)
   → Router handler
@@ -452,7 +452,7 @@ Client → NGINX (/api/) → consistent-hash → Worker N
 
 ### 6.4 NGINX Load Balancing Strategy
 
-NGINX uses `hash $request_uri consistent` (consistent hashing). This means requests for the same URI are sticky to the same upstream, improving cache locality. Because appointment booking uses `POST /api/v1/appointments` for all booking requests, the hash key distributes based on the full URI, which is identical for all booking requests — effectively load-balancing bookings across all three workers evenly.
+NGINX uses round-robin load balancing (default upstream behavior). This distributes requests evenly across all healthy worker replicas without stickiness. The load balancing mode is configurable in `nginx/nginx.conf`.
 
 ### 6.5 Circuit Breaker States
 
@@ -493,7 +493,7 @@ doctors ◄──── appointments ────► patients
 | `id` | INTEGER | PK, auto-increment |
 | `name` | VARCHAR(200) | NOT NULL |
 | `specialty` | VARCHAR(100) | NOT NULL |
-| `is_active` | VARCHAR(10) | NOT NULL, DEFAULT 'true' |
+| `is_active` | BOOLEAN | NOT NULL, DEFAULT true |
 | `created_at` | TIMESTAMP | NOT NULL, DEFAULT now() |
 
 #### `patients`
@@ -514,8 +514,15 @@ doctors ◄──── appointments ────► patients
 | `doctor_id` | INTEGER | FK → doctors.id, NOT NULL, INDEX |
 | `patient_id` | INTEGER | FK → patients.id, NOT NULL, INDEX |
 | `appointment_time` | TIMESTAMP WITHOUT TZ | NOT NULL, INDEX |
+| `duration_minutes` | INTEGER | NOT NULL, DEFAULT 30 |
 | `status` | ENUM(appointmentstatus) | NOT NULL, DEFAULT 'scheduled' |
 | `notes` | TEXT | NULLABLE |
+| `series_id` | INTEGER | FK → recurring_series.id, NULLABLE |
+| `next_reminder_at` | TIMESTAMP | NULLABLE |
+| `reminder_sent` | BOOLEAN | NOT NULL, DEFAULT false |
+| `cancellation_reason` | TEXT | NULLABLE |
+| `cancelled_at` | TIMESTAMP | NULLABLE |
+| `cancelled_by` | VARCHAR | NULLABLE |
 | `created_at` | TIMESTAMP | NOT NULL, DEFAULT now() |
 
 **Composite unique constraint** (recommended): `UNIQUE(doctor_id, appointment_time)` WHERE `status != 'cancelled'` — enforced as a partial unique index to complement the application-level conflict check.
@@ -557,15 +564,59 @@ Authorization: Bearer <jwt_access_token>
 | Method | Path | Auth | Role | Description |
 |---|---|---|---|---|
 | POST | `/auth/register` | None | — | Register new user |
-| POST | `/auth/login` | None | — | Obtain JWT |
+| POST | `/auth/login` | None | — | Obtain JWT + refresh token |
+| POST | `/auth/refresh` | None | — | Rotate refresh token |
+| POST | `/auth/logout` | Required | Any | Revoke access token |
+| POST | `/auth/forgot-password` | None | — | Request password reset email |
+| POST | `/auth/reset-password` | None | — | Reset password with token |
 | GET | `/doctors` | Required | Any | List active doctors |
 | POST | `/doctors` | Required | admin | Create doctor |
+| PATCH | `/doctors/{id}` | Required | admin | Update doctor (incl. deactivation) |
+| GET | `/doctors/{id}/schedule` | Required | Any | Get doctor schedule |
+| PUT | `/doctors/{id}/schedule` | Required | admin | Replace doctor schedule |
+| PATCH | `/doctors/{id}/schedule/{day}` | Required | admin | Update single schedule day |
+| DELETE | `/doctors/{id}/schedule/{day}` | Required | admin | Remove schedule day |
 | GET | `/patients` | Required | Any | List patients |
+| GET | `/patients/{id}` | Required | admin/doctor | Get patient by ID |
+| POST | `/patients` | Required | admin | Create patient |
+| PATCH | `/patients/{id}` | Required | admin | Update patient |
 | GET | `/patients/me` | Required | Any | Current user profile |
 | GET | `/appointments` | Required | Any | List all appointments |
 | POST | `/appointments` | Required | Any | Book appointment |
+| POST | `/appointments/for-me` | Required | patient | Book for self |
+| POST | `/appointments/recurring` | Required | Any | Create recurring series |
+| GET | `/appointments/available` | Required | Any | Get available slots |
+| PATCH | `/appointments/{id}/status` | Required | varies | Update appointment status |
+| PATCH | `/appointments/{id}/notes` | Required | doctor/admin | Update appointment notes |
 | GET | `/appointments/{id}` | Required | Any | Get appointment by ID |
+| DELETE | `/appointments/series/{id}` | Required | admin/patient | Cancel recurring series |
 | GET | `/health` | None | — | Health check |
+| GET | `/api/v1/metrics` | None | — | Prometheus metrics |
+| GET | `/admin/analytics/summary` | Required | admin | Analytics summary |
+| GET | `/admin/analytics/peak-hours` | Required | admin | Peak hours histogram |
+| GET | `/admin/analytics/doctors/{id}/utilisation` | Required | admin | Doctor utilisation rate |
+| GET | `/admin/analytics/patients/{id}/history` | Required | admin | Patient appointment history |
+| GET | `/admin/analytics/audit-log` | Required | admin | Audit log |
+| POST | `/admin/webhooks` | Required | admin | Create webhook |
+| GET | `/admin/webhooks` | Required | admin | List webhooks |
+| GET | `/admin/webhooks/{id}` | Required | admin | Get webhook |
+| PATCH | `/admin/webhooks/{id}` | Required | admin | Update webhook |
+| DELETE | `/admin/webhooks/{id}` | Required | admin | Delete webhook |
+| GET | `/admin/webhooks/{id}/deliveries` | Required | admin | Webhook delivery history |
+| GET | `/admin/patients/{id}/export` | Required | admin | GDPR data export |
+| DELETE | `/admin/patients/{id}` | Required | admin | GDPR anonymisation |
+| GET | `/admin/tenants` | Required | superadmin | List tenants |
+| POST | `/admin/tenants` | Required | superadmin | Create tenant |
+| GET | `/admin/tenants/{id}` | Required | superadmin | Get tenant |
+| PATCH | `/admin/tenants/{id}` | Required | superadmin | Update tenant |
+| DELETE | `/admin/tenants/{id}` | Required | superadmin | Deactivate tenant |
+| POST | `/admin/api-keys` | Required | admin | Create API key |
+| GET | `/admin/api-keys` | Required | admin | List API keys |
+| PATCH | `/admin/api-keys/{prefix}` | Required | admin | Deactivate API key |
+| DELETE | `/admin/api-keys/{prefix}` | Required | admin | Delete API key |
+| GET | `/doctors/{id}/appointments/today` | Required | doctor/admin | Today's appointments |
+| GET | `/doctors/{id}/appointments/upcoming` | Required | doctor/admin | Upcoming appointments |
+| GET | `/doctors/{id}/patients` | Required | doctor/admin | Patients seen by doctor |
 
 ### 8.4 Key Request / Response Schemas
 
@@ -668,7 +719,7 @@ HTTP 422 (Pydantic validation failure) uses FastAPI's default schema:
 
 | Threat | Mitigation |
 |---|---|
-| Credential stuffing / brute force | Rate limiting at NGINX (500 r/s per IP) |
+| Credential stuffing / brute force | Rate limiting at NGINX (30 r/s per IP, burst=50) |
 | JWT forgery | HS256 with secret-key injection via env var |
 | SQL injection | Parameterised ORM queries only |
 | Privilege escalation | Role claim validated server-side on every request |
@@ -679,7 +730,7 @@ HTTP 422 (Pydantic validation failure) uses FastAPI's default schema:
 
 ### 9.2 JWT Lifecycle
 
-1. User registers or logs in → server issues JWT (HS256, `exp = now + 30 min`, `sub = username`, `role = <role>`)
+1. User registers or logs in → server issues JWT (HS256, `exp = now + 15 min`, `sub = username`, `role = <role>`) + refresh token (default 7 days)
 2. Client stores token (recommended: in-memory or HttpOnly cookie — NOT localStorage)
 3. Client sends `Authorization: Bearer <token>` with every protected request
 4. Server decodes and validates signature, checks `exp`, extracts `sub` and `role`

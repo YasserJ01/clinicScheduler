@@ -84,7 +84,8 @@ services:
           sleep 2
         done
         chown -R postgres:postgres /var/lib/postgresql/data
-        exec postgres
+        chmod -R 0700 /var/lib/postgresql/data
+        exec su-exec postgres postgres
     depends_on:
       db:
         condition: service_healthy

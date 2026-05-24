@@ -109,5 +109,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             logger.exception("Rate limiter error, allowing request through")
             if not called_next:
                 response = await call_next(request)
+            if response is None:
+                response = Response(
+                    status_code=500,
+                    content=json.dumps({"detail": "Internal server error"}),
+                    media_type="application/json",
+                )
 
         return response

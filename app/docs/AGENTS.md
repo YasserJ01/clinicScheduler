@@ -691,6 +691,26 @@ On the test dataset (~26k appointments):
 - Default tenant: `id=1, slug="default"` — all existing data backfilled
 - **Security**: Tenant mismatch returns HTTP 403; all queries filtered by tenant_id
 
+### FR‑PAT‑3 Compliance (SRS Gap Analysis)
+**Requirement**: Booking endpoint returns 404 for missing patient; patients created only via explicit endpoints.
+
+**Status**: COMPLIANT ✅
+- `POST /appointments` (appointments.py:247-257) returns 404 with `{"success":false,"node_id":"...","error":"Patient with id N not found"}` when `patient_id` doesn't exist — verified by `test_book_appointment_invalid_patient`
+- `POST /appointments/recurring` (appointments.py:383-386) also returns 404 for missing patient
+- Patient records created only via:
+  - `POST /patients` (explicit admin endpoint) ✅
+  - `POST /auth/register` (user registration, lines 116-125) ✅
+- Booking endpoints never create patient records as a side effect ✅
+- `GET /patients/me` (patients.py:114-122) does auto-create a patient record for the authenticated user's convenience profile — minor deviation but doesn't affect booking ghost-record concern
+
+### Rate Limiter Bug Fix (Phase 17-G Follow-up)
+- `app/core/rate_limiter.py:113` returned `None` when `call_next()` raised an exception after `called_next` was set to `True`. Starlette's `BaseHTTPMiddleware` crashed with `TypeError: 'NoneType' object is not callable`.
+- Fix: Added fallback `Response(500)` when `response is None` after exception handler.
+
+### DB Replica Setup Fixes
+- `scripts/init-replication.sh`: Added `pg_hba.conf` entry for replication user (missing after volume wipe)
+- `docker-compose.yml` db-replica command: Changed `exec postgres` → `exec su-exec postgres postgres` (PostgreSQL refuses to run as root), added `chmod -R 0700 /var/lib/postgresql/data` (pg_basebackup as root creates files with wrong permissions)
+
 ## Dev Commands
 
 ```bash
